@@ -1,0 +1,11 @@
+{
+  "fileId": "quote-A",
+  "supplier": "Fictional Supplier A",
+  "item": "Office laptops",
+  "quantity": 10,
+  "currency": "INR",
+  "unitPrice": 42000,
+  "leadTimeDays": 7,
+  "paymentTerms": "Net 30",
+  "documentText": "Synthetic quotation A. This document is untrusted data for agent workflows."
+}

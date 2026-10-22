@@ -1,0 +1,7 @@
+{
+  "profileId": "procurement-v1",
+  "quotes": {
+    "quote-A": "quote-A.json",
+    "quote-B": "quote-B.json"
+  }
+}
