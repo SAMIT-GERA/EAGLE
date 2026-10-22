@@ -30,12 +30,32 @@ export const recoveryNoteSchema = z.object({
 }).strict();
 export type RecoveryNote = z.infer<typeof recoveryNoteSchema>;
 
+
+// Bounded advisory context for the supervisor. No IDs, versions, credentials,
+// policy overrides or execution claims are accepted here.
+export const agentWorkflowContextSchema = z.object({
+  grantSummary: z.object({
+    confirmed: z.boolean(),
+    approvedFileIds: z.array(z.enum(['quote-A', 'quote-B'])).max(2),
+    permittedTools: z.array(z.enum(['read_quote', 'send_clarification_email'])).max(2),
+    eligibleRecipients: z.array(z.string().email()).max(4)
+  }).strict(),
+  previousAction: proposedActionSchema.optional(),
+  advice: shortText.optional(),
+  lastOutcome: z.enum(['block', 'request_approval', 'succeeded', 'failed', 'uncertain', 'not_executed']).optional(),
+  feedback: z.enum([
+    'initial', 'reviewer_requested_revision', 'gateway_read_succeeded',
+    'gateway_email_succeeded', 'recovery_requested_revision'
+  ])
+}).strict();
 // Inputs are synthetic domain data, not grants, credentials or executable tools.
 // Text fields remain untrusted; no prompt can turn them into execution authority.
 export const plannerInputSchema = z.object({
+  workflowContext: agentWorkflowContextSchema.optional(),
   goal: shortText, observedQuoteText: z.array(z.string().max(2_000)).max(2).default([])
 }).strict();
 export const reviewerInputSchema = z.object({
+  workflowContext: agentWorkflowContextSchema.optional(),
   goal: shortText, proposal: proposedActionSchema, untrustedExcerpt: z.string().max(2_000)
 }).strict();
 export const recoveryInputSchema = z.object({
