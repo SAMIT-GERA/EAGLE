@@ -1,6 +1,6 @@
 const state = {
   receipts: [], pending: [], activity: [], approvalId: undefined, latestEvidence: undefined,
-  uncertain: 0, sequence: 0, grant: undefined
+  uncertain: 0, sequence: 0, grant: undefined, agentRun: undefined
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -134,13 +134,14 @@ async function confirmGrant() {
 }
 
 async function approvePending() {
-  const call = emailCall(); const result = await api('/api/approve', { method: 'POST', body: JSON.stringify({ taskId: call.taskId, callId: call.callId, operatorPin: operatorPin() }) });
+  const call = state.agentRun?.pendingCall ?? emailCall(); const result = await api('/api/approve', { method: 'POST', body: JSON.stringify({ taskId: call.taskId, callId: call.callId, operatorPin: operatorPin() }) });
   if (!result.ok) { showToast(result.body.error ?? 'Approval was not issued.', true); return; }
   state.approvalId = result.body.approvalId; showToast(`Approval issued until ${new Date(result.body.expiresAt).toLocaleTimeString()}.`); await refreshPending();
 }
 
 async function executeApproved() {
   if (!state.approvalId) { showToast('Approve the exact pending email first.', true); return; }
+  if (state.agentRun?.state === 'waiting_for_approval') { const result = await api(`/api/runs/${state.agentRun.runId}/resume`, { method: 'POST', headers: headers(true), body: JSON.stringify({ approvalId: state.approvalId }) }); if (!result.ok) { showToast(result.body?.error ?? 'Workflow resume failed.', true); return; } state.agentRun = result.body; renderRun(result.body); state.approvalId = undefined; await Promise.all([refreshReceipts(), refreshPending()]); return; }
   await toolCall(emailCall(state.approvalId)); state.approvalId = undefined;
 }
 
@@ -157,12 +158,14 @@ async function verifyClaim() {
   $('#claim-result').textContent = result.ok ? `${result.body.verdict}: ${result.body.explanation}` : (result.body?.error ?? 'Claim verification failed.');
   showToast($('#claim-result').textContent, !result.ok || result.body?.verdict !== 'supported');
 }
+function renderRun(run) { state.agentRun = run; const root = $('#agent-run'); root.textContent = `Run ${run.runId} · ${run.state}\n${(run.traces ?? []).map((trace) => `${trace.kind}: ${trace.summary}${trace.ruleId ? ` (${trace.ruleId})` : ''}`).join('\n')}`; }
+async function startAgentRun() { const result = await api('/api/agent/run', { method: 'POST', body: JSON.stringify({ goal: $('#agent-goal').value }) }); if (!result.ok) { showToast(result.body?.error ?? 'Agent run failed to start.', true); return; } renderRun(result.body); showToast('Agent run completed its current server-owned step.'); await Promise.all([refreshReceipts(), refreshPending()]); }
 
 async function boot() {
   const health = await api('/api/health'); const chip = $('#server-status');
   chip.textContent = health.ok ? `${health.body.version} online` : 'Server unavailable'; chip.className = `status-chip ${health.ok ? 'good' : 'bad'}`;
   await refreshGrant(); renderActivity(); renderPending(); renderReceipts(); renderMetrics();
-  $('#confirm-grant').addEventListener('click', confirmGrant); $('#refresh-all').addEventListener('click', refreshAll); $('#refresh-pending').addEventListener('click', refreshPending); $('#refresh-receipts').addEventListener('click', refreshReceipts); $('#approve-pending').addEventListener('click', approvePending); $('#execute-approved').addEventListener('click', executeApproved); $('#verify-claim').addEventListener('click', verifyClaim);
+  $('#confirm-grant').addEventListener('click', confirmGrant); $('#refresh-all').addEventListener('click', refreshAll); $('#refresh-pending').addEventListener('click', refreshPending); $('#refresh-receipts').addEventListener('click', refreshReceipts); $('#approve-pending').addEventListener('click', approvePending); $('#execute-approved').addEventListener('click', executeApproved); $('#verify-claim').addEventListener('click', verifyClaim); $('#start-agent').addEventListener('click', startAgentRun);
   document.querySelectorAll('.mode-control').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
   document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
     const action = button.dataset.action;

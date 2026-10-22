@@ -24,6 +24,9 @@ import { createDefaultCapabilityRegistry } from './gateway/toolRegistry.js';
 import { createApprovalService } from './security/approvalService.js';
 import { canonicalizeEmail, hashEmailAction } from './security/canonical.js';
 import { registerSecurityRoutes } from './security/operatorRoutes.js';
+import { createGeminiClient } from './agents/geminiClient.js';
+import type { LLMClient } from './agents/llmClient.js';
+import { AgentWorkflowCoordinator } from './workflows/agentWorkflow.js';
 
 type ReceiptStore = Awaited<ReturnType<typeof createReceiptStore>>;
 
@@ -34,6 +37,7 @@ export type TaskGateServerOptions = {
   policyVersion?: string;
   /** Demo-only trusted UI boundary. Defaults to the local operator PIN header. */
   authorizeClaimRequest?: (request: Request) => boolean | Promise<boolean>;
+  llmClient?: LLMClient;
 };
 
 export type ComposedTaskGateServer = {
@@ -44,6 +48,7 @@ export type ComposedTaskGateServer = {
   auditStore: ReceiptStore;
   pendingApprovalMetadata: PendingApprovalMetadataStore;
   adapters: ControlledAdapterWiring;
+  workflows: AgentWorkflowCoordinator;
   close(): Promise<void>;
 };
 
@@ -106,6 +111,7 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     findEmailEvidence: auditStore.findEmailEvidence,
     listUnresolvedDispatches: auditStore.listUnresolvedDispatches
   });
+  const workflows = new AgentWorkflowCoordinator({ client: options.llmClient ?? createGeminiClient(), gateway: dispatcher, grantStore, claimVerifier, taskId: grantTemplate.taskId });
   const app = express();
 
   app.use(express.static(fileURLToPath(new URL('../public/', import.meta.url)), {
@@ -155,6 +161,27 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
         response.status(500).json({ error: 'Gateway dispatch failed' });
       }
     }
+  });
+
+  const workflowGoalSchema = z.object({ goal: z.string().trim().min(1).max(1_000) }).strict();
+  const workflowResumeSchema = z.object({ approvalId: z.string().trim().min(1).max(128) }).strict();
+  app.post('/api/agent/run', json({ limit: '16kb', strict: true }), async (request, response) => {
+    const input = workflowGoalSchema.safeParse(request.body);
+    if (!input.success) { response.status(400).json({ error: 'Invalid workflow request' }); return; }
+    try { response.status(202).json(await workflows.start(input.data.goal)); }
+    catch { response.status(409).json({ error: 'Workflow could not start' }); }
+  });
+  app.get('/api/runs/:runId', (request, response) => {
+    const run = workflows.get(request.params.runId);
+    if (run === undefined) { response.status(404).json({ error: 'Workflow run not found' }); return; }
+    response.json(run);
+  });
+  app.post('/api/runs/:runId/resume', json({ limit: '16kb', strict: true }), async (request, response) => {
+    if (!sameSecret(request.get('X-Operator-Pin'), operatorPin)) { response.status(401).json({ error: 'Operator authentication required' }); return; }
+    const input = workflowResumeSchema.safeParse(request.body);
+    if (!input.success) { response.status(400).json({ error: 'Invalid resume request' }); return; }
+    try { response.json(await workflows.resume(request.params.runId, input.data.approvalId)); }
+    catch { response.status(409).json({ error: 'Workflow could not resume' }); }
   });
 
   registerSecurityRoutes(app, {
@@ -208,6 +235,7 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     auditStore,
     pendingApprovalMetadata,
     adapters,
+    workflows,
     close: () => auditStore.close()
   };
 }
