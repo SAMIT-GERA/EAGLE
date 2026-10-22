@@ -3,6 +3,7 @@ import { readQuoteArgsSchema, sendClarificationEmailArgsSchema } from '../contra
 import type { CanonicalEmail, Decision, DispatchResponse, SecurityDependencies, TaskGrant, ToolCall } from '../contracts/types.js';
 import { ControlledAdapterWiring } from '../adapters/wiring.js';
 import { InMemoryGrantStore } from './grants.js';
+import { PendingApprovalMetadataStore } from './pendingApprovalMetadata.js';
 import { evaluateStoredToolCall, PolicyRuleId } from './policy.js';
 import { CapabilityRegistry } from './toolRegistry.js';
 
@@ -10,6 +11,7 @@ export type GatewayRuntime = {
   grantStore: InMemoryGrantStore;
   capabilityRegistry: CapabilityRegistry;
   adapters: ControlledAdapterWiring;
+  pendingApprovalMetadata?: PendingApprovalMetadataStore;
 };
 
 export class GatewayConfigurationError extends Error {
@@ -130,7 +132,7 @@ export class GatewayDispatcher {
       const invalid = makeDecision(call.callId, grant, 'block', PolicyRuleId.InvalidSchema, 'The quote-read arguments are malformed.');
       return this.recordNonExecution(call, grant, invalid);
     }
-    this.reserve(call.callId);
+    this.reserve(call.taskId, call.callId);
     try {
       const capability = this.runtime.capabilityRegistry.get('read_quote');
       if (capability.sideEffecting || capability.adapter.adapterId !== 'quote-reader') {
@@ -154,23 +156,23 @@ export class GatewayDispatcher {
       } catch {
         try {
           const receipt = await this.deps.audit.recordOutcome({ preliminaryReceipt, status: 'failed', adapterOutcome: 'quote_reader_failed' });
-          this.terminalOrUncertainCallIds.add(call.callId);
+          this.markTerminal(call.taskId, call.callId);
           return { decision: policyDecision, receipt };
         } catch {
-          this.terminalOrUncertainCallIds.add(call.callId);
+          this.markTerminal(call.taskId, call.callId);
           throw new GatewayUncertainOutcomeError(call.callId);
         }
       }
       try {
         const receipt = await this.deps.audit.recordOutcome({ preliminaryReceipt, status: 'succeeded', adapterOutcome: 'quote_read' });
-        this.terminalOrUncertainCallIds.add(call.callId);
+        this.markTerminal(call.taskId, call.callId);
         return { decision: policyDecision, receipt, data };
       } catch {
-        this.terminalOrUncertainCallIds.add(call.callId);
+        this.markTerminal(call.taskId, call.callId);
         throw new GatewayUncertainOutcomeError(call.callId);
       }
     } finally {
-      this.inFlightCallIds.delete(call.callId);
+      this.inFlightCallIds.delete(this.callKey(call.taskId, call.callId));
     }
   }
 
@@ -190,22 +192,30 @@ export class GatewayDispatcher {
     }
 
     if (call.approvalId === undefined) {
-      await this.deps.approvalService.registerPending(canonicalEmail, this.deps.hashEmailAction(canonicalEmail));
+      const digest = this.deps.hashEmailAction(canonicalEmail);
+      await this.deps.approvalService.registerPending(canonicalEmail, digest);
+      this.runtime.pendingApprovalMetadata?.register(canonicalEmail, digest);
       return this.recordNonExecution(call, grant, policyDecision, canonicalEmail);
     }
 
-    this.reserve(call.callId);
+    this.reserve(call.taskId, call.callId);
     try {
       const capability = this.runtime.capabilityRegistry.get('send_clarification_email');
       if (!capability.sideEffecting || !capability.requiresApproval || capability.adapter.adapterId !== 'mock-mail') {
         throw new GatewayConfigurationError('The mock-mail capability is misconfigured.');
       }
       const digest = this.deps.hashEmailAction(canonicalEmail);
+      if (this.runtime.pendingApprovalMetadata !== undefined &&
+        !this.runtime.pendingApprovalMetadata.matchesPending(canonicalEmail, digest)) {
+        const rejected = makeDecision(call.callId, grant, 'block', PolicyRuleId.ApprovalInvalid, 'Pending approval metadata is missing, stale, or altered.');
+        return this.recordNonExecution(call, grant, rejected, canonicalEmail);
+      }
       const approved = await this.deps.approvalService.validateAndConsume({ email: canonicalEmail, approvalId: call.approvalId, digest });
       if (!approved) {
         const rejected = makeDecision(call.callId, grant, 'block', PolicyRuleId.ApprovalInvalid, 'Approval is invalid, expired, altered, or already consumed.');
         return this.recordNonExecution(call, grant, rejected, canonicalEmail);
       }
+      this.runtime.pendingApprovalMetadata?.markConsumed(canonicalEmail, digest);
 
       const rechecked = evaluateStoredToolCall(call, this.runtime.grantStore);
       if (rechecked.decision !== 'request_approval') {
@@ -238,16 +248,16 @@ export class GatewayDispatcher {
           status: result.outcome === 'succeeded' ? 'succeeded' : 'failed',
           adapterOutcome: result.outcome === 'succeeded' ? 'mock_mail_sent' : 'mock_mail_failed'
         });
-        this.terminalOrUncertainCallIds.add(call.callId);
+        this.markTerminal(call.taskId, call.callId);
         return result.outcome === 'succeeded'
           ? { decision: allowDecision, receipt, data: result.evidence }
           : { decision: allowDecision, receipt };
       } catch {
-        this.terminalOrUncertainCallIds.add(call.callId);
+        this.markTerminal(call.taskId, call.callId);
         throw new GatewayUncertainOutcomeError(call.callId);
       }
     } finally {
-      this.inFlightCallIds.delete(call.callId);
+      this.inFlightCallIds.delete(this.callKey(call.taskId, call.callId));
     }
   }
 
@@ -262,11 +272,20 @@ export class GatewayDispatcher {
     return { decision: policyDecision, receipt };
   }
 
-  private reserve(callId: string): void {
-    if (this.inFlightCallIds.has(callId) || this.terminalOrUncertainCallIds.has(callId)) {
+  private reserve(taskId: string, callId: string): void {
+    const key = this.callKey(taskId, callId);
+    if (this.inFlightCallIds.has(key) || this.terminalOrUncertainCallIds.has(key)) {
       throw new DuplicateGatewayCallError(callId);
     }
-    this.inFlightCallIds.add(callId);
+    this.inFlightCallIds.add(key);
+  }
+
+  private markTerminal(taskId: string, callId: string): void {
+    this.terminalOrUncertainCallIds.add(this.callKey(taskId, callId));
+  }
+
+  private callKey(taskId: string, callId: string): string {
+    return JSON.stringify([taskId, callId]);
   }
 }
 

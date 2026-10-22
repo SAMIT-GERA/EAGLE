@@ -43,6 +43,12 @@ The public `TaskGrant` remains unchanged. A future Samit-owned internal grant-st
 
 Eeshaan owns canonicalization and approval services. Samit's gateway will call the frozen `SecurityDependencies` methods only after a syntactically valid, currently eligible email has passed all hard-deny checks. Canonical approval must bind the exact canonical payload, call ID, task ID, and grant version. The gateway must re-evaluate grant validity and hard-deny conditions before adapter execution. An invalid, expired, replayed, altered, or consumed approval yields `TG-A002` and zero adapter calls.
 
+### Pending-approval integration state
+
+Server composition retains a private pending-approval metadata record for each gateway-created pending email. It binds the canonical action digest, task ID, call ID, trusted grant version, canonical recipient, subject, and body. The operator route may issue an approval only when its pending row exactly matches that private record, the active grant is still the same version, and the pure policy still returns `request_approval`. The gateway independently repeats its metadata, approval-consumption, grant, and policy checks before dispatch.
+
+This metadata is process-local and is deliberately not reconstructed from an operator-visible pending row after restart. Pending approvals from before a restart therefore fail closed; the operator must initiate a new, identical request under the current grant. This bridge is not a second approval authority: Eeshaan's approval service remains the only issuer and atomic consumer.
+
 ## Dispatch and audit boundary
 
 The policy evaluator has no adapter, network, audit, approval-write, or filesystem side effects. For a side-effecting email allowed after exact approval, the gateway must persist audit preflight before invoking the adapter. A failed preflight is `TG-X001` and guarantees zero adapter calls. A policy `allow` is authorization only; it is never evidence of success. If outcome persistence fails after a possible side effect, the gateway must expose an internal uncertain-outcome result, prohibit automatic resend, and must not relabel the outcome as success or failure through the frozen public `ExecutionStatus` enum.
