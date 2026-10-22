@@ -30,4 +30,18 @@ export class ControlledAdapterWiring {
     }
     throw new UnknownAdapterIdError(adapterId);
   }
+
+  resolveQuoteReader(adapterId: string): SyntheticQuoteReader {
+    if (adapterId !== 'quote-reader') {
+      throw new UnknownAdapterIdError(adapterId);
+    }
+    return this.quoteReader;
+  }
+
+  resolveMockMail(adapterId: string): MockMailAdapter {
+    if (adapterId !== 'mock-mail') {
+      throw new UnknownAdapterIdError(adapterId);
+    }
+    return this.mockMail;
+  }
 }
