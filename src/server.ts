@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import express, { json } from 'express';
 import type { Express, Request } from 'express';
 import { z } from 'zod';
@@ -106,6 +107,11 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     listUnresolvedDispatches: auditStore.listUnresolvedDispatches
   });
   const app = express();
+
+  app.use(express.static(fileURLToPath(new URL('../public/', import.meta.url)), {
+    index: 'index.html',
+    redirect: false
+  }));
 
   app.get('/api/health', (_request, response) => {
     response.json({ status: 'ok', version: 'taskgate-v2' });

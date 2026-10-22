@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="TaskGate security operations dashboard" />
+    <title>TaskGate — Security Operations</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand"><span class="brand-mark">TG</span><div><h1>TaskGate</h1><p>Agent Execution Security Protocol</p></div></div>
+        <div class="domain">DOMAIN 8 <span>IT Infrastructure · AI Agent Cybersecurity</span></div>
+        <div id="server-status" class="status-chip neutral">Checking server</div>
+      </header>
+
+      <section class="hero">
+        <div><p class="eyebrow">SECURITY OPERATIONS CONSOLE</p><h2>Every agent action earns its execution.</h2><p class="lede">A controlled demo of grants, deterministic policy, human approval and durable execution evidence.</p></div>
+        <div class="hero-note"><span class="pulse"></span><strong>Controlled adapters only</strong><small>Mock mail · synthetic quotes · no direct model access</small></div>
+      </section>
+
+      <section class="metrics" aria-label="Security overview">
+        <article><span>Allowed</span><strong id="metric-allowed">—</strong><small>Authorized attempts</small></article>
+        <article><span>Blocked</span><strong id="metric-blocked">—</strong><small>Policy hard-denies</small></article>
+        <article><span>Pending</span><strong id="metric-pending">—</strong><small>Awaiting human approval</small></article>
+        <article><span>Succeeded</span><strong id="metric-succeeded">—</strong><small>Observed terminal results</small></article>
+        <article><span>Failed / uncertain</span><strong id="metric-risk">—</strong><small>Never presented as success</small></article>
+      </section>
+
+      <section class="grid primary-grid">
+        <article class="panel grant-panel"><div class="panel-heading"><div><p class="eyebrow">01 · GRANT CONTROL</p><h3>Task authority</h3></div><span id="grant-state" class="status-chip neutral">Not confirmed</span></div>
+          <div id="grant-detail" class="empty">Confirm the demo grant to activate controlled actions.</div>
+          <div class="operator-row"><label>Operator PIN <input id="operator-pin" type="password" autocomplete="off" placeholder="Enter local demo PIN" /></label><button id="confirm-grant" class="button primary">Confirm grant</button></div>
+          <p class="fine-print">PIN remains in this form only. It is not saved in browser storage.</p>
+        </article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">02 · OPERATOR CONTROLS</p><h3>Demo mail mode</h3></div></div>
+          <p class="muted">Only the authenticated operator can change the network-free mock-mail outcome.</p>
+          <div class="button-group"><button class="button secondary mode-control" data-mode="succeed">Set success mode</button><button class="button danger mode-control" data-mode="fail">Set failure mode</button></div>
+          <div id="mode-result" class="inline-result">No mode change requested.</div>
+        </article>
+      </section>
+
+      <section class="panel demo-panel"><div class="panel-heading"><div><p class="eyebrow">GUIDED DEMONSTRATION</p><h3>Real gateway requests, no scripted success</h3></div><button id="refresh-all" class="button ghost">Refresh evidence</button></div>
+        <div class="demo-steps">
+          <button class="demo-step" data-action="quote-a"><b>1</b><span>Read permitted quote A</span><small>read_quote · expected allow</small></button>
+          <button class="demo-step" data-action="quote-b"><b>2</b><span>Read malicious quote B</span><small>untrusted text as data</small></button>
+          <button class="demo-step" data-action="delete"><b>3</b><span>Attempt destructive delete</span><small>delete_quote · expected block</small></button>
+          <button class="demo-step" data-action="request-email"><b>4</b><span>Request clarification email</span><small>expected approval required</small></button>
+          <button id="approve-pending" class="demo-step operator-action"><b>5</b><span>Approve pending action</span><small>operator route only</small></button>
+          <button id="execute-approved" class="demo-step operator-action"><b>6</b><span>Execute exact approval</span><small>single-use approval required</small></button>
+        </div>
+      </section>
+
+      <section class="grid evidence-grid">
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">AGENT ACTIVITY</p><h3>Gateway event stream</h3></div></div><div id="activity" class="timeline empty">No gateway calls in this browser session.</div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">HUMAN APPROVAL</p><h3>Redacted pending queue</h3></div><button id="refresh-pending" class="button ghost">Refresh</button></div><div id="pending-list" class="empty">Operator authentication is required to view pending requests.</div></article>
+      </section>
+
+      <section class="grid evidence-grid">
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">AUDIT &amp; EVIDENCE</p><h3>Durable receipt timeline</h3></div><button id="refresh-receipts" class="button ghost">Refresh</button></div><div id="receipts" class="receipt-list empty">Operator authentication is required to view receipts.</div></article>
+        <article class="panel quote-panel"><div class="panel-heading"><div><p class="eyebrow">SOURCE INSPECTION</p><h3>Untrusted quote content</h3></div></div><pre id="quote-output" class="quote-output">Read a quote to inspect its server-owned fixture. Document text is rendered as escaped text.</pre></article>
+      </section>
+
+      <section class="panel claim-panel"><div class="panel-heading"><div><p class="eyebrow">CLAIM VERIFICATION</p><h3>Evidence-backed email-sent check</h3></div><button id="verify-claim" class="button secondary">Verify latest successful mail</button></div>
+        <p class="muted">This invokes the trusted operator claim endpoint. A successful authorization is not evidence of email delivery.</p><div id="claim-result" class="inline-result">No claim has been verified.</div>
+      </section>
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
