@@ -6,4 +6,5 @@ evaluation-results/
 .build/
 coverage/
 *.log
+*.tsbuildinfo
 
