@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { statusClass, statusLabel } from '../public/app.js';
+import { normalizePendingApprovals, statusClass, statusLabel } from '../public/app.js';
 import { createTaskGateServer } from '../src/server.js';
 
 describe('security operations dashboard', () => {
@@ -25,6 +25,16 @@ describe('security operations dashboard', () => {
     expect(source).toContain('Network request failed');
     expect(source).toContain('Outcome is uncertain. Do not resend automatically.');
     expect(source).toContain('response.status === 204');
+    expect(source).toContain("api('/api/pending-approvals', { headers: headers(true) })");
+    expect(source).toContain("$('#operator-pin').addEventListener('change'");
+  });
+
+  it('normalizes the authenticated redacted pending-approval response without exposing email content', () => {
+    const row = { taskId: 'demo-task', callId: 'demo-email-1', recipient: '[redacted]', subject: '[redacted]', body: '[redacted]' };
+    expect(normalizePendingApprovals([row])).toEqual([row]);
+    expect(normalizePendingApprovals(row)).toEqual([row]);
+    expect(normalizePendingApprovals({ pending: [row] })).toBeUndefined();
+    expect(normalizePendingApprovals([{ taskId: 'demo-task', callId: 'demo-email-1' }])).toBeUndefined();
   });
 
   it('serves the dashboard assets from the real Express composition', async () => {

@@ -15,6 +15,22 @@ export function statusLabel(value) {
   return ({ allow: 'Allowed', block: 'Blocked', request_approval: 'Approval required', succeeded: 'Executed successfully', failed: 'Definite failure', not_executed: 'Not executed', uncertain: 'Outcome uncertain' })[value] ?? String(value);
 }
 
+// The operator route currently returns a redacted array. Accepting one row as
+// well keeps this UI resilient to a compatible single-row transport response,
+// without ever accepting an unstructured wrapper or exposing message content.
+export function normalizePendingApprovals(body) {
+  const candidates = Array.isArray(body) ? body : body && typeof body === 'object' ? [body] : undefined;
+  if (!candidates) return undefined;
+  const rows = [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') return undefined;
+    const { taskId, callId, recipient, subject, body: messageBody } = candidate;
+    if ([taskId, callId, recipient, subject, messageBody].some((value) => typeof value !== 'string')) return undefined;
+    rows.push(Object.freeze({ taskId, callId, recipient, subject, body: messageBody }));
+  }
+  return rows;
+}
+
 function operatorPin() { return $('#operator-pin').value; }
 function headers(operator = false) { return operator && operatorPin() ? { 'X-Operator-Pin': operatorPin() } : {}; }
 function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
@@ -71,7 +87,14 @@ function renderPending() {
   if (state.pending.length === 0) { root.className = 'empty'; root.textContent = operatorPin() ? 'No pending approvals.' : 'Operator authentication is required to view pending requests.'; return; }
   root.className = 'timeline';
   for (const pending of state.pending) {
-    const row = element('div', undefined, 'pending-row'); row.append(element('strong', `${pending.taskId} · ${pending.callId}`), element('small', 'Email content is redacted by the operator API.')); root.append(row);
+    const row = element('div', undefined, 'pending-row');
+    row.append(
+      element('strong', `${pending.taskId} · ${pending.callId}`),
+      element('small', `Recipient: ${pending.recipient}`),
+      element('small', `Subject: ${pending.subject}`),
+      element('small', `Body: ${pending.body}`)
+    );
+    root.append(row);
   }
 }
 
@@ -108,7 +131,9 @@ async function refreshReceipts() {
 async function refreshPending() {
   const result = await api('/api/pending-approvals', { headers: headers(true) });
   if (!result.ok) { state.pending = []; renderPending(); renderMetrics(); if (operatorPin()) showToast(result.body.error ?? 'Unable to load pending approvals.', true); return; }
-  state.pending = result.body; renderPending(); renderMetrics();
+  const pending = normalizePendingApprovals(result.body);
+  if (!pending) { state.pending = []; renderPending(); renderMetrics(); showToast('Pending approval response had an unexpected format.', true); return; }
+  state.pending = pending; renderPending(); renderMetrics();
 }
 
 async function refreshAll() { await Promise.all([refreshGrant(), refreshReceipts(), refreshPending()]); }
@@ -166,6 +191,7 @@ async function boot() {
   chip.textContent = health.ok ? `${health.body.version} online` : 'Server unavailable'; chip.className = `status-chip ${health.ok ? 'good' : 'bad'}`;
   await refreshGrant(); renderActivity(); renderPending(); renderReceipts(); renderMetrics();
   $('#confirm-grant').addEventListener('click', confirmGrant); $('#refresh-all').addEventListener('click', refreshAll); $('#refresh-pending').addEventListener('click', refreshPending); $('#refresh-receipts').addEventListener('click', refreshReceipts); $('#approve-pending').addEventListener('click', approvePending); $('#execute-approved').addEventListener('click', executeApproved); $('#verify-claim').addEventListener('click', verifyClaim); $('#start-agent').addEventListener('click', startAgentRun);
+  $('#operator-pin').addEventListener('change', () => { void refreshReceipts(); void refreshPending(); });
   document.querySelectorAll('.mode-control').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
   document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
     const action = button.dataset.action;
