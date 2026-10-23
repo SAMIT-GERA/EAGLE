@@ -95,6 +95,24 @@ describe('real security integration and Express composition', () => {
     } finally { await running.stop(); }
   });
 
+  it('permits repeated guided quote reads with fresh IDs and preserves quote-B as untrusted data', async () => {
+    const running = await start();
+    try {
+      await confirm(running);
+      const reads = [
+        { fileId: 'quote-A', callId: 'quote-a-11111111-1111-4111-8111-111111111111' },
+        { fileId: 'quote-B', callId: 'quote-b-22222222-2222-4222-8222-222222222222' },
+        { fileId: 'quote-A', callId: 'quote-a-33333333-3333-4333-8333-333333333333' },
+        { fileId: 'quote-B', callId: 'quote-b-44444444-4444-4444-8444-444444444444' }
+      ] as const;
+      for (const read of reads) {
+        const result = await request(running, 'POST', '/api/tool-call', { taskId: grant.taskId, callId: read.callId, tool: 'read_quote', args: { fileId: read.fileId } });
+        expect(result.body).toMatchObject({ decision: { decision: 'allow', ruleId: 'TG-P001' }, receipt: { executionStatus: 'succeeded' }, data: { fileId: read.fileId } });
+        if (read.fileId === 'quote-B') expect((result.body!.data as { documentText: string }).documentText).toMatch(/ignore|email|instruction/i);
+      }
+    } finally { await running.stop(); }
+  });
+
   it('creates a pending email, approves the exact action, sends once, and verifies the real audit evidence', async () => {
     const running = await start();
     try {
@@ -241,18 +259,22 @@ describe('real security integration and Express composition', () => {
     }
   });
 
-  it('recovers durable receipt history after restart and does not execute a duplicate read', async () => {
+  it('reproduces the sanitized quote-B failure when a dashboard-refresh-reused call ID conflicts with durable history', async () => {
     const root = await mkdtemp(join(tmpdir(), 'taskgate-restart-'));
     const path = join(root, 'audit.jsonl');
     const first = await start(path);
     try {
       await confirm(first);
-      expect((await request(first, 'POST', '/api/tool-call', { taskId: grant.taskId, callId: 'restart-read', tool: 'read_quote', args: { fileId: 'quote-A' } })).status).toBe(200);
+      const firstRead = await request(first, 'POST', '/api/tool-call', { taskId: grant.taskId, callId: 'quote-b-1', tool: 'read_quote', args: { fileId: 'quote-B' } });
+      expect(firstRead.status).toBe(200);
+      expect((firstRead.body!.data as { documentText: string }).documentText).toMatch(/ignore|email|instruction/i);
     } finally { await first.stop(); }
     const second = await start(path);
     try {
       await confirm(second);
-      expect((await request(second, 'POST', '/api/tool-call', { taskId: grant.taskId, callId: 'restart-read', tool: 'read_quote', args: { fileId: 'quote-A' } })).status).toBe(500);
+      expect(await request(second, 'POST', '/api/tool-call', { taskId: grant.taskId, callId: 'quote-b-1', tool: 'read_quote', args: { fileId: 'quote-B' } })).toMatchObject({
+        status: 500, body: { error: 'Gateway dispatch failed' }
+      });
       expect(second.server.adapters.mockMail.listAttempts()).toEqual([]);
       expect((await request(second, 'GET', '/api/receipts', undefined, true)).body).toHaveLength(2);
     } finally { await second.stop(); }

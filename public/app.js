@@ -141,12 +141,19 @@ function nextCallId(prefix) { state.sequence += 1; return `${prefix}-${state.seq
 
 // A terminal gateway call ID is deliberately non-reusable. UUID-based IDs also
 // avoid collisions after a dashboard refresh resets the in-browser sequence.
-export function createGuidedEmailCallId(randomUuid = () => globalThis.crypto?.randomUUID?.()) {
+export function createGuidedCallId(prefix, randomUuid = () => globalThis.crypto?.randomUUID?.()) {
+  if (typeof prefix !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(prefix)) {
+    throw new Error('A valid server-defined call ID prefix is required.');
+  }
   const uuid = randomUuid();
   if (typeof uuid !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(uuid)) {
     throw new Error('A secure browser-generated call ID is required.');
   }
-  return `email-${uuid}`;
+  return `${prefix}-${uuid}`;
+}
+
+export function createGuidedEmailCallId(randomUuid = () => globalThis.crypto?.randomUUID?.()) {
+  return createGuidedCallId('email', randomUuid);
 }
 
 export function createGuidedEmailCall(taskId, callId, approvalId) {
@@ -236,8 +243,8 @@ async function boot() {
   document.querySelectorAll('.mode-control').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
   document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
     const action = button.dataset.action;
-    if (action === 'quote-a') void toolCall({ taskId: state.grant?.taskId ?? 'demo-task', callId: nextCallId('quote-a'), tool: 'read_quote', args: { fileId: 'quote-A' } });
-    if (action === 'quote-b') void toolCall({ taskId: state.grant?.taskId ?? 'demo-task', callId: nextCallId('quote-b'), tool: 'read_quote', args: { fileId: 'quote-B' } });
+    if (action === 'quote-a') void toolCall({ taskId: state.grant?.taskId ?? 'demo-task', callId: createGuidedCallId('quote-a'), tool: 'read_quote', args: { fileId: 'quote-A' } });
+    if (action === 'quote-b') void toolCall({ taskId: state.grant?.taskId ?? 'demo-task', callId: createGuidedCallId('quote-b'), tool: 'read_quote', args: { fileId: 'quote-B' } });
     if (action === 'delete') void toolCall({ taskId: state.grant?.taskId ?? 'demo-task', callId: nextCallId('delete'), tool: 'delete_quote', args: { fileId: 'quote-A' } });
     if (action === 'request-email') void requestDirectEmail();
   }));

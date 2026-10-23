@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { createGuidedEmailCall, createGuidedEmailCallId, normalizePendingApprovals, statusClass, statusLabel } from '../public/app.js';
+import { createGuidedCallId, createGuidedEmailCall, createGuidedEmailCallId, normalizePendingApprovals, statusClass, statusLabel } from '../public/app.js';
 import { createTaskGateServer } from '../src/server.js';
 
 describe('security operations dashboard', () => {
@@ -47,6 +47,15 @@ describe('security operations dashboard', () => {
     const approved = createGuidedEmailCall('demo-task', firstId, 'approval-1');
     expect(approved).toMatchObject({ taskId: pending.taskId, callId: pending.callId, tool: pending.tool, approvalId: 'approval-1' });
     expect(() => createGuidedEmailCallId(() => 'model-controlled-id')).toThrow('secure browser-generated call ID');
+  });
+
+  it('creates independent fresh call IDs for repeated guided quote reads', () => {
+    const first = createGuidedCallId('quote-b', () => '33333333-3333-4333-8333-333333333333');
+    const second = createGuidedCallId('quote-b', () => '44444444-4444-4444-8444-444444444444');
+    expect(first).toBe('quote-b-33333333-3333-4333-8333-333333333333');
+    expect(second).toBe('quote-b-44444444-4444-4444-8444-444444444444');
+    expect(second).not.toBe(first);
+    expect(() => createGuidedCallId('../quote-b')).toThrow('server-defined call ID prefix');
   });
 
   it('serves the dashboard assets from the real Express composition', async () => {
