@@ -1,3 +1,8 @@
+import { createHash } from 'node:crypto';
+import { consumeReadQuoteResult } from './quotation.js';
+import type { ObservedQuotation, SourceTraceSummary, QuoteConsumption } from './quotation.js';
+import { compareQuotations, toAgentQuotationContext } from './quoteComparison.js';
+import type { QuoteComparison } from './quoteComparison.js';
 import { z } from 'zod';
 import { taskGrantSchema } from '../contracts/schemas.js';
 import type { RunMode } from '../contracts/types.js';
@@ -45,6 +50,9 @@ export interface WorkflowResult {
   };
   trace: AgentTraceEvent[];
   observations: GatewayObservation[];
+  quotations: ObservedQuotation[];
+  comparison: QuoteComparison;
+  emailProposalStatus: 'not_attempted' | 'proposed';
   /** Internal only: contains exact canonical payload. Never serialize to a public route. */
   pending?: Extract<GatewayObservation, { kind: 'request_approval' }>;
   humanReviewProposal?: ProposedAction;
@@ -86,7 +94,15 @@ export async function runAgentWorkflow(
   const invocationIds = new Set<string>();
   const receiptIds = new Set<string>();
   const callIds = new Set<string>();
-  const quoteTexts = new Map<string, string>();
+  const quoteTexts = new Map<'quote-A' | 'quote-B', string>();
+  const quotations = new Map<string, ObservedQuotation>();
+  const quoteSources = new Map<'quote-A' | 'quote-B', SourceTraceSummary>();
+  let emailProposalStatus: WorkflowResult['emailProposalStatus'] = 'not_attempted';
+  const sourceSnapshot = () => structuredClone([...quoteSources.values()]);
+  const documentsForModel = () => [...quoteTexts].map(([fileId, text]) => ({
+    fileId, trustLabel: 'untrusted_document', excerpt: text.slice(0, 300),
+    evidence: quoteSources.get(fileId)?.evidence
+  }));
   let pending: WorkflowResult['pending'];
   let previousAction: ProposedAction | undefined;
   let advice: string | undefined;
@@ -117,13 +133,17 @@ export async function runAgentWorkflow(
     return {
       runId: run.runId, mode, gatewayKind, status, reason,
       counts: { ...counts }, trace: run.snapshot(), observations: structuredClone(observations),
+      quotations: structuredClone([...quotations.values()]),
+      comparison: compareQuotations([...quotations.values()]), emailProposalStatus,
       ...(pending ? { pending: structuredClone(pending) } : {}),
       ...(humanReviewProposal ? { humanReviewProposal: structuredClone(humanReviewProposal) } : {}),
       ...(summary === undefined ? {} : { completion: { summary, source: 'untrusted_planner' } }),
       outcomeUncertain
     };
   };
-  async function invoke<T>(role: AgentRole, operation: () => Promise<RoleResult<T>>): Promise<T | undefined> {
+  async function invoke<T>(
+    role: AgentRole, operation: () => Promise<RoleResult<T>>, sources: SourceTraceSummary[] = []
+  ): Promise<T | undefined> {
     if (options.signal?.aborted) { modelFailure = 'aborted'; return; }
     if (counts.llmInvocations >= limits.llmInvocations) { modelFailure = 'llm_limit'; return; }
     counts.llmInvocations++;
@@ -144,7 +164,8 @@ export async function runAgentWorkflow(
       const matchingMode = trace.runMode === null || trace.runMode === mode;
       run.add({ role, eventType: trace.attempts === 0 ? 'model_not_sent' : 'model_invocation',
         source: 'model', summary: role + ': ' + trace.status,
-        runMode: trace.runMode ?? mode, invocation: trace });
+        runMode: trace.runMode ?? mode, invocation: trace,
+        ...(trace.attempts > 0 && sources.length ? { sources } : {}) });
       if (!matchingMode) { modelFailure = 'model_mode_mismatch'; return; }
       if (!result.ok || trace.status !== 'succeeded') { modelFailure = 'model_failed'; return; }
       return result.output;
@@ -181,9 +202,10 @@ export async function runAgentWorkflow(
     // Do not spend another Planner call that could create an over-budget proposal.
     if (counts.toolProposals >= limits.toolProposals) return finish('stopped', 'proposal_limit');
     const plan = await invoke('planner', () => runPlanner(deps.llm, {
-      goal, observedQuoteText: [...quoteTexts.values()].map((text) => text.slice(0, 500)),
+      goal, observedQuoteText: documentsForModel().map((document) => JSON.stringify(document)),
+      quotationContext: toAgentQuotationContext([...quotations.values()]),
       workflowContext: { grantSummary, feedback, previousAction, advice, lastOutcome }
-    }, roleOptions));
+    }, roleOptions), sourceSnapshot());
     if (!plan) return finish('stopped', modelFailure);
     if (plan.state === 'finish') return finish('completed', 'planner_finished', plan.summary);
     if (counts.toolProposals >= limits.toolProposals) return finish('stopped', 'proposal_limit');
@@ -191,13 +213,22 @@ export async function runAgentWorkflow(
     const action = proposedActionSchema.parse(plan.action);
     const key = actionKey(action);
     previousAction = action;
+    if (action.tool === 'send_clarification_email') emailProposalStatus = 'proposed';
+    run.add({ role: 'planner', source: 'supervisor', eventType: 'tool_proposal',
+      summary: 'Validated proposal; not an authorization.', runMode: mode,
+      sources: sourceSnapshot(), proposal: {
+        tool: action.tool,
+        argsDigest: createHash('sha256').update(JSON.stringify(['taskgate:proposal:v1', key])).digest('hex'),
+        ...(action.tool === 'read_quote' ? { fileId: action.args.fileId } : {})
+      } });
     if (attemptedActions.has(key) || revisedActions.has(key)) return finish('stopped', 'non_progressing_action');
 
     run.transition('reviewing');
     const review = await invoke('reviewer', () => runReviewer(deps.llm, {
-      goal, proposal: action, untrustedExcerpt: [...quoteTexts.values()].join('\n').slice(0, 2_000),
+      goal, proposal: action, untrustedExcerpt: JSON.stringify(documentsForModel()).slice(0, 2_000),
+      quotationContext: toAgentQuotationContext([...quotations.values()]),
       workflowContext: { grantSummary, feedback }
-    }, roleOptions));
+    }, roleOptions), sourceSnapshot());
     if (!review) return finish('stopped', modelFailure);
     run.add({ role: 'reviewer', source: 'supervisor', eventType: 'review_advice',
       summary: review.recommendation, runMode: mode });
@@ -217,6 +248,7 @@ export async function runAgentWorkflow(
     attemptedActions.add(key);
     counts.gatewaySubmissions++;
     let observation: GatewayObservation;
+    let quoteConsumption: QuoteConsumption | undefined;
     let invalid: WorkflowReason = 'gateway_error';
     try {
       const value = await deps.gateway.dispatch(
@@ -224,6 +256,10 @@ export async function runAgentWorkflow(
       );
       invalid = 'invalid_gateway_observation';
       observation = validateGatewayObservation(value, action, context);
+      if (action.tool === 'read_quote' && observation.kind === 'succeeded') {
+        quoteConsumption = consumeReadQuoteResult({ action, context, observation, gatewayKind, mode });
+        if (quoteConsumption.status === 'rejected') throw new Error('Invalid quote evidence');
+      }
       if (callIds.has(observation.callId)) throw new Error('Reused gateway call ID');
       if (observation.receiptId && receiptIds.has(observation.receiptId)) {
         throw new Error('Reused gateway receipt ID');
@@ -242,14 +278,39 @@ export async function runAgentWorkflow(
     if (observation.receiptId) receiptIds.add(observation.receiptId);
     observations.push(observation);
     lastOutcome = observation.kind;
+    let currentSource: SourceTraceSummary | undefined;
+    if (quoteConsumption && quoteConsumption.status !== 'rejected') {
+      const q = quoteConsumption.status === 'accepted' ? quoteConsumption.quotation : undefined;
+      const fileId = quoteConsumption.status === 'accepted' ? quoteConsumption.quotation.fileId : quoteConsumption.fileId;
+      currentSource = {
+        fileId, evidence: quoteConsumption.status === 'accepted' ? quoteConsumption.quotation.source : quoteConsumption.source,
+        callId: observation.callId, receiptId: observation.receiptId,
+        runMode: gatewayKind === 'scripted_gateway' ? 'scripted_gateway' : mode
+      };
+      quoteSources.set(fileId, currentSource);
+      if (q) quotations.set(q.fileId, q);
+    }
     run.add({
       role: 'taskgate', source: 'gateway', eventType: 'gateway_observation',
       summary: observation.kind, decision: observation.decision, ruleId: observation.ruleId, callId: observation.callId,
       ...(observation.receiptId ? { receiptId: observation.receiptId } : {}),
+      executionStatus: observation.kind === 'block' || observation.kind === 'request_approval' ||
+        observation.kind === 'not_executed' ? 'not_executed' : observation.kind,
+      ...(currentSource ? { sources: [currentSource] } : {}),
+
       runMode: gatewayKind === 'scripted_gateway' ? 'scripted_gateway' : mode
     });
     if (observation.kind === 'succeeded') {
       if (observation.quote) quoteTexts.set(observation.quote.fileId, observation.quote.documentText);
+      if (quoteConsumption?.status === 'accepted') {
+        const q = quoteConsumption.quotation;
+        if (q.quote.documentText !== undefined) quoteTexts.set(q.fileId, q.quote.documentText);
+        if (quotations.size === 2) {
+          const comparison = compareQuotations([...quotations.values()]);
+          run.add({ role: 'taskgate', source: 'supervisor', eventType: 'quotation_comparison',
+            summary: comparison.status, sources: sourceSnapshot(), runMode: mode });
+        }
+      }
       feedback = action.tool === 'read_quote' ? 'gateway_read_succeeded' : 'gateway_email_succeeded';
       run.transition('planning');
       continue;

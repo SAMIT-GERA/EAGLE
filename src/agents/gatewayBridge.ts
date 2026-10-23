@@ -1,3 +1,4 @@
+import { quotationPayloadSchema } from './quotationSchemas.js';
 import { z } from 'zod';
 import { callIdSchema, taskGrantSchema, taskIdSchema } from '../contracts/schemas.js';
 import type { TaskGrant } from '../contracts/types.js';
@@ -41,7 +42,7 @@ export const gatewayObservationSchema = z.discriminatedUnion('kind', [
   }).strict(),
   z.object({
     ...correlation, kind: z.literal('succeeded'), decision: z.literal('allow'),
-    receiptId: taskIdSchema, quote: quoteSchema.optional()
+    receiptId: taskIdSchema, quote: quoteSchema.optional(), quotation: quotationPayloadSchema.optional()
   }).strict(),
   z.object({
     ...correlation, kind: z.literal('failed'), decision: z.literal('allow'), receiptId: taskIdSchema
@@ -58,6 +59,11 @@ export function validateGatewayObservation(
   const grant = context.grant;
   if (observation.taskId !== grant.taskId || observation.grantVersion !== grant.version ||
     observation.tool !== action.tool) throw new Error('Inconsistent gateway correlation');
+  if (observation.kind === 'succeeded' && observation.quotation) {
+    if (action.tool !== 'read_quote' || observation.quotation.data.fileId !== action.args.fileId || observation.quote) {
+      throw new Error('Inconsistent structured quote observation');
+    }
+  }
   if (observation.kind === 'succeeded' && observation.quote) {
     if (action.tool !== 'read_quote' || observation.quote.fileId !== action.args.fileId) {
       throw new Error('Inconsistent quote observation');

@@ -1,3 +1,4 @@
+import type { SourceTraceSummary } from './quotation.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { DecisionKind, RunMode } from '../contracts/types.js';
@@ -24,6 +25,9 @@ export interface AgentTraceEvent {
   ruleId?: string;
   source: 'supervisor' | 'model' | 'gateway';
   invocation?: InvocationTrace;
+  sources?: SourceTraceSummary[];
+  proposal?: { tool: 'read_quote' | 'send_clarification_email'; argsDigest: string; fileId?: 'quote-A' | 'quote-B' };
+  executionStatus?: 'succeeded' | 'failed' | 'not_executed' | 'uncertain';
 }
 const safeName = z.string().regex(/^[A-Za-z0-9._:/-]{1,128}$/);
 const categorySchema: z.ZodType<LLMErrorCategory> = z.enum([

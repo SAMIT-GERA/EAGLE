@@ -132,7 +132,8 @@ counts, observations, trace and outcomeUncertain. Pending/review data is optiona
 A completed workflow means Planner finished; completion.summary is explicitly
 untrusted_planner text, not evidence that mail was sent or every action succeeded.
 Use actual gateway observations and the existing claim verifier for execution
-claims. No comparison engine or structured claim integration is added here.
+claims. Deterministic quotation comparison is described below; structured claim
+integration remains outside the agent workflow.
 
 AgentTraceEvent preserves the master fields and adds source and optional
 invocation metadata (plus decision/ruleId on gateway observations).
@@ -157,3 +158,146 @@ protection across runs, current grants/policy and approval enforcement remain
 the real gateway's responsibility. No run persistence, HTTP route, approval
 resume, fixture retrieval, billing change or live test is started by this module.
 Ordinary tests use deterministic clients and bridges with native fetch forbidden.
+
+## Source-aware quotation handling (AI Milestone 3)
+
+No gateway, adapter or fixture directory exists in this checkout at the inspected
+baseline. The following is an isolated agent-side integration format, NOT a claim
+about Samit's final manifest/adapter schema. No agent code reads files or fetches
+quotations. Only successful, authorized read_quote observations delivered through
+the injected TaskGate bridge may become comparison evidence.
+
+### Internal bridge addition
+
+A succeeded GatewayObservation may carry:
+quotation: {format: 'procurement-v1', data: ProcurementQuoteData, source?: SuppliedSource}
+
+data is strict:
+- fileId: quote-A | quote-B, matching the requested and approved file ID.
+- supplier (1..120 chars), item (1..160 chars).
+- quantity: integer 1..1,000,000; quantityUnit: each | kg, explicitly required.
+- unitPrice: a finite nonnegative number or plain decimal string, at most two
+  decimal places, maximum 1,000,000,000 major currency units.
+- currency: INR | USD | EUR | GBP; these supported currencies use two decimal places.
+- leadTimeDays: integer 0..3650. This field explicitly fixes the unit as days.
+- paymentTerms: original source string, 1..500 chars, without interpretation.
+- optional documentText: original untrusted string, at most 8000 chars.
+
+No missing price, quantity, unit or lead time is filled in. Totals, extra fields,
+other currencies, unsupported units and excessive precision are rejected.
+Numbers such as 0.1 + 0.2 are rejected rather than silently rounding them.
+The format currently supports whole quantities only, including whole kilograms.
+The old quote {fileId, documentText} remains accepted as an excerpt, but supplies
+no structured numeric evidence and therefore cannot produce a comparison.
+Sending both legacy quote and structured quotation is rejected as ambiguous.
+
+Exports:
+- mapProcurementQuoteData(value) validates/maps this format to ValidatedQuote.
+  This is the format-mapping boundary to adapt after Samit's real fixture review.
+- consumeReadQuoteResult({action, context, observation, gatewayKind, mode})
+  revalidates gateway correlation and only accepts allow + succeeded read_quote
+  with an actual receipt ID. It returns accepted, insufficient_evidence or rejected.
+- compareQuotations(observedQuotes), quotationTotalMinor(), formatMinorUnits().
+- serializeQuotationSource(), hashQuotationSource(), toAgentQuotationContext().
+
+### Source evidence and digest definition
+
+SourceEvidenceRef retains the master shape:
+{sourceId, sha256, trustLabel: 'untrusted_document'}.
+
+Source evidence separately records status verified | unverified | unavailable,
+digest basis, computed digest and actual supplied source ID/digest when present.
+No file ID is silently promoted into a source ID. An absent source ID is never
+invented, even if a content digest can be computed. An excerpt-only/missing data
+result is unavailable; complete received data without enough anchoring metadata
+is unverified. Numeric comparisons may still use those genuine gateway-observed
+values, while preserving the source-verification limitation on each entry.
+
+For canonical_quote_v1, SHA-256 hashes UTF-8 JSON of a fixed-order array:
+[
+  "taskgate:quotation-source:v1",
+  fileId, supplier, item, quantity, quantityUnit, unitPriceMinor, currency,
+  leadTimeDays, paymentTerms, documentText-or-null
+]
+This hashes the FULL mapped source representation, not a model excerpt.
+JSON key order and equivalent decimal price representations are canonicalized.
+Source strings, Unicode, line endings, and absent versus empty documentText are
+preserved. This is not a digest of the original manifest file's byte formatting.
+
+SuppliedSource has one of two strict forms:
+- {basis: 'canonical_quote_v1', sourceId?, sha256?}
+- {basis: 'raw_utf8', sourceId?, sha256?, utf8: string}, maximum 16000 chars.
+
+For raw_utf8, utf8 must decode as strict procurement JSON mapping to the exact
+same canonical quote values. The digest hashes its actual received UTF-8 string
+bytes, including formatting and trailing whitespace. The gateway is responsible
+for losslessly delivering the original UTF-8 source; arbitrary binary/PDF source
+bytes are not supported by this mapping. Any supplied digest must match.
+Raw source bytes never enter model inputs or public-safe trace summaries.
+
+A reference is verified only with an actual trusted source ID plus either:
+(1) a matching canonical digest supplied by the gateway, or (2) consistent raw
+UTF-8 source bytes, whose digest is computed and checked if also supplied.
+Verified means this defined content/digest consistency check passed. It is not
+an authenticity signature, proof of complete provenance or proof that content
+caused a model proposal. The DI bridge remains the trusted origin boundary.
+
+### Arithmetic and incomplete comparisons
+
+Unit prices convert lexically to integer minor-unit strings. Totals use BigInt:
+quantity * unitPriceMinor. Monetary values remain JSON-safe decimal strings;
+floating-point multiplication is never used. Precision beyond two decimals is
+rejected, not rounded or guessed.
+
+Two distinct observed file/call/receipt identities from the same task/grant are
+required. Currency, item, quantity and quantityUnit must match exactly.
+Incompatibilities are reported explicitly; there is no FX conversion, unit
+conversion, inferred basket equivalence, tax, discount or shipping calculation.
+
+Absolute difference is higher total minus lower total.
+Percentage difference = (higher - lower) / higher * 100, rounded half up to two
+decimal places using integer arithmetic. Both totals zero yields null percentage
+with an explicit reason; one zero and one positive total yields 100.00 percent.
+Cheaper/faster file IDs are null on ties. Original payment terms remain verbatim
+in comparison entries; no contractual preference is inferred. The result reports
+tradeoffs and deliberately gives no overall supplier ranking.
+
+### Supervisor, model delivery and traces
+
+The existing state machine, dispatch ownership, approval pause, replay checks,
+12/6/2 limits and uncertainty handling remain intact. WorkflowResult adds
+quotations, deterministic comparison and emailProposalStatus. not_attempted
+means no validated email proposal was observed; it does not claim universal
+injection resistance. A proposed email is not automatically classified unsafe:
+the actual gateway remains responsible for policy.
+
+Both accepted quotes are retained. Planner/Reviewer receive quotationContext:
+bounded numeric observations, exact formatted monetary values and differences, supplied source references
+or explicit unverified status, and excerpts labeled untrusted_document.
+Excerpts are at most 300 chars and model-facing payment terms at most 200 chars;
+truncation is flagged explicitly, and full source fields remain in internal observations/comparison objects.
+The legacy text input fields now carry labeled JSON document envelopes.
+No document text is interpolated into system instructions or trusted controls.
+
+The source-aware prompt version documents how to use calculated observations.
+Prompt instructions are defense in depth, not authorization or a universal
+injection detector. Reviewer stays advisory. Comparison never dispatches email.
+Actual role functions and distinct provider calls are preserved.
+
+Traces add sources, sanitized tool_proposal fingerprints and executionStatus.
+A proposal digest uses SHA-256 over JSON ["taskgate:proposal:v1", actionKey];
+it is an internal correlation fingerprint, NOT the approval action digest.
+Source records include only real IDs/digests and evidence status. Model events
+record sources made available to that invocation, not a claim of causal use.
+Gateway events preserve actual decision, rule, call, receipt and execution state.
+A quotation_comparison event reports only the calculation status and source
+metadata. No raw quotation or mail bodies are copied into trace summaries.
+Scripted gateways/sources stay visibly scripted; live model metadata cannot
+convert a fixture into real tool execution.
+
+All WorkflowResult data is internal, including full quotation bodies/raw-source
+payloads in observations. Future HTTP routes must authenticate/redact it rather
+than serialize it blindly. No routes or persistent run storage are added here.
+Samit's real bridge must supply actual dispatch/terminal receipt correlation,
+the reviewed mapped quote format, source identity/digest basis and sanitized
+synthetic content. Those production integration guarantees remain unverified.

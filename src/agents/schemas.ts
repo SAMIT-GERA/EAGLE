@@ -1,3 +1,4 @@
+import { agentQuotationContextSchema } from './quoteComparison.js';
 import { z } from 'zod';
 import { readQuoteArgsSchema, sendClarificationEmailArgsSchema } from '../contracts/schemas.js';
 import type { RunMode } from '../contracts/types.js';
@@ -52,10 +53,12 @@ export const agentWorkflowContextSchema = z.object({
 // Text fields remain untrusted; no prompt can turn them into execution authority.
 export const plannerInputSchema = z.object({
   workflowContext: agentWorkflowContextSchema.optional(),
+  quotationContext: agentQuotationContextSchema.optional(),
   goal: shortText, observedQuoteText: z.array(z.string().max(2_000)).max(2).default([])
 }).strict();
 export const reviewerInputSchema = z.object({
   workflowContext: agentWorkflowContextSchema.optional(),
+  quotationContext: agentQuotationContextSchema.optional(),
   goal: shortText, proposal: proposedActionSchema, untrustedExcerpt: z.string().max(2_000)
 }).strict();
 export const recoveryInputSchema = z.object({
