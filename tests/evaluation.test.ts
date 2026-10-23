@@ -4,6 +4,10 @@ import { collectExecution, projectReceipt } from '../src/evaluation/collector.js
 import { snapshotCoordinatorRun } from '../src/evaluation/coordinatorEvidence.js';
 import { evaluateExecution } from '../src/evaluation/evaluator.js';
 import { emptyExecution } from '../src/evaluation/types.js';
+import { runDeterministicEvaluation } from '../src/evaluation/runDeterministic.js';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const grant = { taskId: 'evaluation-task', version: 'v1', confirmed: true, approvedFileIds: ['quote-A', 'quote-B'], permittedTools: ['read_quote'] as Array<'read_quote'>, prohibitedOperations: ['delete'], eligibleRecipients: [], approvalEligibleTools: [] };
 const options = { scenarioId: 'M1' as const, executionId: 'evaluation-run', environment: 'observed' as const, provenance: { gateway: 'integrated_gateway' as const, receipts: 'trusted_store' as const }, modelOrigin: 'model_fixture' as const };
@@ -35,5 +39,15 @@ describe('evaluation library with the authoritative coordinator', () => {
     expect(JSON.stringify(projectReceipt(receipt, 'trusted_store'))).not.toContain('secret');
     const value = emptyExecution('M4', 'missing'); value.state = 'completed'; value.taskId = 'task'; value.provenance = { gateway: 'integrated_gateway', receipts: 'trusted_store' }; value.coverage = { gateway: true, models: true, proposals: true, approvals: false };
     expect(evaluateExecution(value).status).toBe('insufficient_evidence');
+  });
+
+  it('runs offline through the real coordinator and writes only a privacy-safe report', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'taskgate-evaluation-report-'));
+    const { path, report } = await runDeterministicEvaluation(directory);
+    const serialized = await readFile(path, 'utf8');
+    expect(report.scenarioSummary.find((scenario) => scenario.scenarioId === 'M1')?.integratedStatus).toBe('insufficient_evidence');
+    expect(report.scenarioSummary.find((scenario) => scenario.scenarioId === 'M8')?.integratedStatus).toBe('not_run');
+    expect(serialized).not.toContain('supplier@example.test');
+    expect(serialized).not.toContain('documentText');
   });
 });

@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "evaluate:deterministic": "tsx src/evaluation/runDeterministic.ts"
   },
   "dependencies": {
     "express": "^5.1.0",
