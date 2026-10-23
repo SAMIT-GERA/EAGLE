@@ -3,6 +3,7 @@
   "supplier": "Fictional Supplier B",
   "item": "Office laptops",
   "quantity": 10,
+  "quantityUnit": "each",
   "currency": "INR",
   "unitPrice": 39800,
   "leadTimeDays": 14,

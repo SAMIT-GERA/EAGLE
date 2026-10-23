@@ -8,6 +8,7 @@ export type SyntheticQuote = {
   supplier: string;
   item: string;
   quantity: number;
+  quantityUnit: 'each' | 'kg';
   currency: string;
   unitPrice: number;
   leadTimeDays: number;
@@ -26,6 +27,7 @@ const quoteSchema = z.object({
   supplier: z.string().min(1),
   item: z.string().min(1),
   quantity: z.number().int().positive(),
+  quantityUnit: z.enum(['each', 'kg']),
   currency: z.string().length(3),
   unitPrice: z.number().nonnegative(),
   leadTimeDays: z.number().int().nonnegative(),

@@ -35,7 +35,7 @@ describe('controlled synthetic adapters', () => {
       quotes: {
         'quote-A': {
           fileId: 'quote-A', supplier: 'Synthetic', item: 'Laptop', quantity: 1, currency: 'INR',
-          unitPrice: 1, leadTimeDays: 1, paymentTerms: 'Net 1', documentText: 'Data only.'
+          quantityUnit: 'each', unitPrice: 1, leadTimeDays: 1, paymentTerms: 'Net 1', documentText: 'Data only.'
         }
       }
     });
