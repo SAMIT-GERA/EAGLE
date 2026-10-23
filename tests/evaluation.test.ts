@@ -15,13 +15,17 @@ describe('evaluation library with the authoritative coordinator', () => {
       server.grantStore.create(grant);
       const run = await server.workflows.start('compare quote A and quote B');
       const dispatch = vi.spyOn(server.dispatcher, 'dispatchToolCall');
+      const events = server.workflows.evaluationEvents(run.runId);
       const collected = await collectExecution(options, {
-        readWorkflow: async () => snapshotCoordinatorRun(run),
+        readWorkflow: async () => snapshotCoordinatorRun(run, events),
         readReceipts: () => server.auditStore.audit.listReceipts()
       });
       expect(dispatch).not.toHaveBeenCalled();
       expect(server.adapters.mockMail.listAttempts()).toEqual([]);
       expect(collected.runId).toBe(run.runId);
+      expect(events.filter((event) => event.kind === 'gateway_response')).toHaveLength(2);
+      expect(events.filter((event) => event.kind === 'quotation').every((event) => event.sourceSha256 && event.receiptId)).toBe(true);
+      expect(events.some((event) => event.kind === 'planner_proposal')).toBe(false);
       expect(evaluateExecution(collected).integratedQualified).toBe(false);
     } finally { await server.close(); }
   });

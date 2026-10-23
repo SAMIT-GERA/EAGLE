@@ -11,6 +11,9 @@ import { bridgeTrustedReadQuote } from '../gateway/quotationBridge.js';
 import type { GatewayDispatcher } from '../gateway/dispatch.js';
 import { GatewayUncertainOutcomeError } from '../gateway/dispatch.js';
 import type { InMemoryGrantStore } from '../gateway/grants.js';
+import { CoordinatorEvidenceLedger } from './coordinatorEvidenceLedger.js';
+import type { CoordinatorEvidenceEvent } from './coordinatorEvidenceLedger.js';
+import { createHash } from 'node:crypto';
 
 export type WorkflowState = 'running' | 'waiting_for_approval' | 'completed' | 'blocked' | 'failed' | 'uncertain';
 export type WorkflowTrace = Readonly<{ kind: 'gateway' | 'planner' | 'reviewer' | 'recovery' | 'claim' | 'quotation'; summary: string; trace?: InvocationTrace; decision?: string; ruleId?: string }>;
@@ -93,11 +96,13 @@ function boundedModelContext(quotations: readonly ObservedQuotation[]): { observ
 /** In-memory, server-owned workflow state. Losing this state on restart fails closed for pending resumes. */
 export class AgentWorkflowCoordinator {
   private readonly runs = new Map<string, WorkflowRun>();
+  private readonly evidence = new Map<string, CoordinatorEvidenceLedger>();
   private readonly resuming = new Set<string>();
   constructor(private readonly deps: Dependencies) {}
 
   get(runId: string): WorkflowRun | undefined { const run = this.runs.get(runId); return run && snapshot(run); }
   list(): readonly WorkflowRun[] { return Object.freeze([...this.runs.values()].map(snapshot)); }
+  evaluationEvents(runId: string): readonly CoordinatorEvidenceEvent[] { return this.evidence.get(runId)?.snapshot() ?? Object.freeze([]); }
 
   async start(goal: unknown): Promise<WorkflowRun> {
     if (typeof goal !== 'string' || goal.trim().length === 0 || goal.length > 1_000) throw new Error('Invalid workflow goal');
@@ -108,6 +113,8 @@ export class AgentWorkflowCoordinator {
       runId, goal: goal.trim(), taskId: active.taskId, state: 'running', traces: [],
       quotations: [], comparison: safeComparison([])
     };
+    const ledger = new CoordinatorEvidenceLedger(runId, active.taskId);
+    this.evidence.set(runId, ledger);
     const add = (entry: WorkflowTrace) => { run = { ...run, traces: [...run.traces, entry] }; this.runs.set(runId, run); };
     this.runs.set(runId, run);
     const quotes: ObservedQuotation[] = [];
@@ -116,6 +123,7 @@ export class AgentWorkflowCoordinator {
       const request: ToolCall = {
         taskId: active.taskId, callId: `run-${runId}-${fileId}`, tool: 'read_quote', args: { fileId }
       };
+      ledger.gatewayRequest(request);
       let response: DispatchResponse;
       try {
         response = await this.deps.gateway.dispatchToolCall(request);
@@ -128,6 +136,7 @@ export class AgentWorkflowCoordinator {
         add({ kind: 'quotation', summary: 'Additional quote evidence was unavailable; comparison remains insufficient.' });
         continue;
       }
+      ledger.gatewayResponse(response);
       add({ kind: 'gateway', summary: 'Read quote through TaskGate gateway.', decision: response.decision.decision, ruleId: response.decision.ruleId });
       try {
         const observation = bridgeTrustedReadQuote({ request, grant: active, response });
@@ -136,6 +145,7 @@ export class AgentWorkflowCoordinator {
           context: { grant: active }, observation, gatewayKind: 'taskgate', mode: 'scripted_gateway'
         });
         if (consumed.status === 'accepted') quotes.push(consumed.quotation);
+        if (consumed.status === 'accepted') ledger.append({ kind: 'quotation', callId: request.callId, receiptId: response.receipt.receiptId, sourceId: consumed.quotation.source.sourceId, sourceSha256: consumed.quotation.source.computedSha256, status: consumed.quotation.source.status });
         else add({ kind: 'quotation', summary: 'Gateway read did not provide validated structured quotation evidence.' });
       } catch {
         add({ kind: 'quotation', summary: 'Gateway quote evidence failed validation and was excluded.' });
@@ -145,15 +155,18 @@ export class AgentWorkflowCoordinator {
     run = { ...run, quotations: quotes.map(safeQuotation), comparison };
     this.runs.set(runId, run);
     add({ kind: 'quotation', summary: `Deterministic quotation comparison: ${comparison.status}.` });
+    ledger.append({ kind: 'comparison', status: comparison.status });
     const context = boundedModelContext(quotes);
     const planner = await runPlanner(this.deps.client, { goal: run.goal, observedQuoteText: context.observedQuoteText });
     add({ kind: 'planner', summary: planner.ok ? 'Planner returned a validated proposal.' : 'Planner failed safely.', trace: planner.trace });
     if (!planner.ok) { run = { ...run, state: 'failed' }; this.runs.set(runId, run); return snapshot(run); }
     if (planner.output.state === 'finish') { run = { ...run, state: 'completed' }; this.runs.set(runId, run); return snapshot(run); }
     const proposal = planner.output.action;
+    ledger.append({ kind: 'planner_proposal', tool: proposal.tool, digest: createHash('sha256').update(JSON.stringify(proposal.args), 'utf8').digest('hex'), status: 'validated' });
     const call: ToolCall = { taskId: active.taskId, callId: `run-${runId}-action`, tool: proposal.tool, args: structuredClone(proposal.args) };
     const reviewer = await runReviewer(this.deps.client, { goal: run.goal, proposal, untrustedExcerpt: context.reviewerExcerpt });
     add({ kind: 'reviewer', summary: reviewer.ok ? reviewer.output.explanation : 'Reviewer failed safely; gateway remains authoritative.', trace: reviewer.trace });
+    if (reviewer.ok) ledger.append({ kind: 'reviewer_advice', advisory: reviewer.output.recommendation, status: 'advisory' });
     if (isProcurementComparisonGoal(run.goal) && proposal.tool === 'read_quote' && quotes.some((quote) => quote.fileId === proposal.args.fileId)) {
       run = { ...run, state: 'completed' };
       add({ kind: 'quotation', summary: 'Quote evidence was already collected; no duplicate gateway read was submitted.' });
@@ -167,6 +180,7 @@ export class AgentWorkflowCoordinator {
     if (existing === undefined || existing.state !== 'waiting_for_approval' || existing.pendingCall === undefined || typeof approvalId !== 'string') throw new Error('Pending workflow run was not found');
     if (this.resuming.has(runId)) throw new Error('Workflow resume is already in progress');
     this.resuming.add(runId);
+    this.evidence.get(runId)?.append({ kind: 'resume', callId: existing.pendingCall.callId, status: 'attempted' });
     try {
       const add = (entry: WorkflowTrace) => { const current = this.runs.get(runId)!; this.runs.set(runId, { ...current, traces: [...current.traces, entry] }); };
       const call = { ...cloneCall(existing.pendingCall), approvalId };
@@ -175,17 +189,22 @@ export class AgentWorkflowCoordinator {
   }
 
   private async dispatch(run: WorkflowRun, call: ToolCall, add: (entry: WorkflowTrace) => void): Promise<WorkflowRun> {
+    const ledger = this.evidence.get(run.runId);
+    ledger?.gatewayRequest(call);
     let response: DispatchResponse;
     try { response = await this.deps.gateway.dispatchToolCall(call); }
     catch (error) {
       const uncertain = error instanceof GatewayUncertainOutcomeError;
       const recovery = await runRecovery(this.deps.client, { outcome: uncertain ? 'uncertain' : 'blocked', description: uncertain ? 'Execution outcome is uncertain; do not resend.' : 'Gateway denied the action.' });
+      ledger?.append({ kind: 'recovery', status: recovery.ok ? 'observed' : 'failed' });
       add({ kind: 'recovery', summary: recovery.ok ? recovery.output.reason : 'Recovery failed safely.', trace: recovery.trace });
       const next = { ...this.runs.get(run.runId)!, state: uncertain ? 'uncertain' as const : 'blocked' as const };
       this.runs.set(run.runId, next); return snapshot(next);
     }
+    ledger?.gatewayResponse(response);
     add({ kind: 'gateway', summary: response.decision.reason, decision: response.decision.decision, ruleId: response.decision.ruleId });
     if (response.decision.decision === 'request_approval' && call.approvalId === undefined) {
+      ledger?.append({ kind: 'pending', callId: call.callId, receiptId: response.receipt.receiptId, decision: response.decision.decision, ruleId: response.decision.ruleId, executionStatus: response.receipt.executionStatus });
       const next = { ...this.runs.get(run.runId)!, state: 'waiting_for_approval' as const, pendingCall: cloneCall(call), lastResponse: response };
       this.runs.set(run.runId, next); return snapshot(next);
     }
@@ -194,6 +213,7 @@ export class AgentWorkflowCoordinator {
     if (next.state === 'failed' || next.state === 'blocked') {
       const outcome = next.state === 'failed' ? 'failed' : 'blocked';
       const recovery = await runRecovery(this.deps.client, { outcome, description: response.decision.reason });
+      ledger?.append({ kind: 'recovery', callId: call.callId, status: recovery.ok ? 'observed' : 'failed' });
       add({ kind: 'recovery', summary: recovery.ok ? recovery.output.reason : 'Recovery failed safely.', trace: recovery.trace });
       next = { ...this.runs.get(run.runId)!, state: outcome };
     }

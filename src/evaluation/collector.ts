@@ -55,6 +55,9 @@ export async function collectExecution(options: CollectionOptions, deps: Evaluat
         ...(trace.errorCategory ? { errorCategory: trace.errorCategory } : {}) });
     }
   }
+  for (const event of snapshot?.events ?? []) if (event.kind === 'gateway_response' && event.callId && event.receiptId && event.tool && event.grantVersion && event.decision && event.ruleId && event.executionStatus) {
+    e.gateways.push({ origin: options.provenance.gateway === 'integrated_gateway' ? 'integrated_gateway' : 'gateway_fixture', taskId: event.taskId, callId: event.callId, grantVersion: event.grantVersion, tool: event.tool as 'read_quote' | 'send_clarification_email' | 'delete_quote', kind: event.executionStatus === 'succeeded' ? 'succeeded' : event.executionStatus === 'failed' ? 'failed' : event.decision === 'block' ? 'block' : event.decision === 'request_approval' ? 'request_approval' : 'not_executed', decision: event.decision, ruleId: event.ruleId, receiptId: event.receiptId, observedAt: event.timestamp });
+  }
   const supplied = { ...(snapshot ?? {}), ...(supplement ?? {}) };
   if (supplied.gateways) e.gateways = structuredClone(supplied.gateways);
   if (supplied.adapters) e.adapters = structuredClone(supplied.adapters);
