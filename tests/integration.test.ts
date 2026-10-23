@@ -115,6 +115,30 @@ describe('real security integration and Express composition', () => {
     } finally { await running.stop(); }
   });
 
+  it('supports repeated guided email workflows with fresh call IDs while retaining replay protection', async () => {
+    const running = await start();
+    try {
+      await confirm(running);
+      const first = 'email-11111111-1111-4111-8111-111111111111';
+      const second = 'email-22222222-2222-4222-8222-222222222222';
+
+      for (const callId of [first, second]) {
+        expect((await request(running, 'POST', '/api/tool-call', email(callId))).body).toMatchObject({
+          decision: { decision: 'request_approval', ruleId: 'TG-A001' }, receipt: { executionStatus: 'not_executed' }
+        });
+        const approvalId = await approve(running, callId);
+        expect((await request(running, 'POST', '/api/tool-call', email(callId, approvalId))).body).toMatchObject({
+          decision: { decision: 'allow', ruleId: 'TG-P002' }, receipt: { executionStatus: 'succeeded' }
+        });
+      }
+
+      expect(running.server.adapters.mockMail.listEvidence()).toHaveLength(2);
+      const replay = await request(running, 'POST', '/api/tool-call', email(first));
+      expect(replay).toMatchObject({ status: 500, body: { error: 'Gateway dispatch failed' } });
+      expect((await request(running, 'GET', '/api/pending-approvals', undefined, true)).body).toEqual([]);
+    } finally { await running.stop(); }
+  });
+
   it('rejects altered, replayed, stale, and metadata-invalidated approved calls without another send', async () => {
     const running = await start();
     try {

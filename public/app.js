@@ -1,6 +1,6 @@
 const state = {
   receipts: [], pending: [], activity: [], approvalId: undefined, latestEvidence: undefined,
-  uncertain: 0, sequence: 0, grant: undefined, agentRun: undefined
+  uncertain: 0, sequence: 0, grant: undefined, agentRun: undefined, directEmailCall: undefined
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -138,7 +138,34 @@ async function refreshPending() {
 
 async function refreshAll() { await Promise.all([refreshGrant(), refreshReceipts(), refreshPending()]); }
 function nextCallId(prefix) { state.sequence += 1; return `${prefix}-${state.sequence}`; }
-function emailCall(approvalId) { return { taskId: state.grant?.taskId ?? 'demo-task', callId: 'demo-email-1', tool: 'send_clarification_email', args: { recipient: 'supplier@example.test', subject: 'Clarification request', body: 'Please confirm lead time and payment terms.' }, ...(approvalId ? { approvalId } : {}) }; }
+
+// A terminal gateway call ID is deliberately non-reusable. UUID-based IDs also
+// avoid collisions after a dashboard refresh resets the in-browser sequence.
+export function createGuidedEmailCallId(randomUuid = () => globalThis.crypto?.randomUUID?.()) {
+  const uuid = randomUuid();
+  if (typeof uuid !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(uuid)) {
+    throw new Error('A secure browser-generated call ID is required.');
+  }
+  return `email-${uuid}`;
+}
+
+export function createGuidedEmailCall(taskId, callId, approvalId) {
+  return {
+    taskId, callId, tool: 'send_clarification_email',
+    args: { recipient: 'supplier@example.test', subject: 'Clarification request', body: 'Please confirm lead time and payment terms.' },
+    ...(approvalId ? { approvalId } : {})
+  };
+}
+
+function createDirectEmailCall() {
+  const call = createGuidedEmailCall(state.grant?.taskId ?? 'demo-task', createGuidedEmailCallId());
+  state.directEmailCall = call;
+  return call;
+}
+
+function pendingEmailCall() {
+  return state.agentRun?.state === 'waiting_for_approval' ? state.agentRun.pendingCall : state.directEmailCall;
+}
 
 async function toolCall(call) {
   const result = await api('/api/tool-call', { method: 'POST', body: JSON.stringify(call) });
@@ -159,7 +186,9 @@ async function confirmGrant() {
 }
 
 async function approvePending() {
-  const call = state.agentRun?.pendingCall ?? emailCall(); const result = await api('/api/approve', { method: 'POST', body: JSON.stringify({ taskId: call.taskId, callId: call.callId, operatorPin: operatorPin() }) });
+  const call = pendingEmailCall();
+  if (!call) { showToast('Start an email request before issuing approval.', true); return; }
+  const result = await api('/api/approve', { method: 'POST', body: JSON.stringify({ taskId: call.taskId, callId: call.callId, operatorPin: operatorPin() }) });
   if (!result.ok) { showToast(result.body.error ?? 'Approval was not issued.', true); return; }
   state.approvalId = result.body.approvalId; showToast(`Approval issued until ${new Date(result.body.expiresAt).toLocaleTimeString()}.`); await refreshPending();
 }
@@ -167,7 +196,19 @@ async function approvePending() {
 async function executeApproved() {
   if (!state.approvalId) { showToast('Approve the exact pending email first.', true); return; }
   if (state.agentRun?.state === 'waiting_for_approval') { const result = await api(`/api/runs/${state.agentRun.runId}/resume`, { method: 'POST', headers: headers(true), body: JSON.stringify({ approvalId: state.approvalId }) }); if (!result.ok) { showToast(result.body?.error ?? 'Workflow resume failed.', true); return; } state.agentRun = result.body; renderRun(result.body); state.approvalId = undefined; await Promise.all([refreshReceipts(), refreshPending()]); return; }
-  await toolCall(emailCall(state.approvalId)); state.approvalId = undefined;
+  const call = state.directEmailCall;
+  if (!call) { showToast('The approved email request is no longer available.', true); return; }
+  await toolCall(createGuidedEmailCall(call.taskId, call.callId, state.approvalId));
+  state.approvalId = undefined;
+  state.directEmailCall = undefined;
+}
+
+async function requestDirectEmail() {
+  if (state.directEmailCall) { showToast('Finish the current email approval workflow before starting another request.', true); return; }
+  const call = createDirectEmailCall();
+  const result = await toolCall(call);
+  if (!result.ok && result.status !== 503) state.directEmailCall = undefined;
+  if (result.ok && result.body?.decision?.decision !== 'request_approval') state.directEmailCall = undefined;
 }
 
 async function setMode(mode) {
@@ -198,7 +239,7 @@ async function boot() {
     if (action === 'quote-a') void toolCall({ taskId: state.grant?.taskId ?? 'demo-task', callId: nextCallId('quote-a'), tool: 'read_quote', args: { fileId: 'quote-A' } });
     if (action === 'quote-b') void toolCall({ taskId: state.grant?.taskId ?? 'demo-task', callId: nextCallId('quote-b'), tool: 'read_quote', args: { fileId: 'quote-B' } });
     if (action === 'delete') void toolCall({ taskId: state.grant?.taskId ?? 'demo-task', callId: nextCallId('delete'), tool: 'delete_quote', args: { fileId: 'quote-A' } });
-    if (action === 'request-email') void toolCall(emailCall());
+    if (action === 'request-email') void requestDirectEmail();
   }));
 }
 

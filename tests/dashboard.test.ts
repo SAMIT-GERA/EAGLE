@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { normalizePendingApprovals, statusClass, statusLabel } from '../public/app.js';
+import { createGuidedEmailCall, createGuidedEmailCallId, normalizePendingApprovals, statusClass, statusLabel } from '../public/app.js';
 import { createTaskGateServer } from '../src/server.js';
 
 describe('security operations dashboard', () => {
@@ -35,6 +35,18 @@ describe('security operations dashboard', () => {
     expect(normalizePendingApprovals(row)).toEqual([row]);
     expect(normalizePendingApprovals({ pending: [row] })).toBeUndefined();
     expect(normalizePendingApprovals([{ taskId: 'demo-task', callId: 'demo-email-1' }])).toBeUndefined();
+  });
+
+  it('creates a fresh valid ID for every guided email workflow and preserves it through approval execution', () => {
+    const firstId = createGuidedEmailCallId(() => '11111111-1111-4111-8111-111111111111');
+    const secondId = createGuidedEmailCallId(() => '22222222-2222-4222-8222-222222222222');
+    expect(firstId).toMatch(/^email-[a-f0-9-]{36}$/);
+    expect(secondId).not.toBe(firstId);
+
+    const pending = createGuidedEmailCall('demo-task', firstId);
+    const approved = createGuidedEmailCall('demo-task', firstId, 'approval-1');
+    expect(approved).toMatchObject({ taskId: pending.taskId, callId: pending.callId, tool: pending.tool, approvalId: 'approval-1' });
+    expect(() => createGuidedEmailCallId(() => 'model-controlled-id')).toThrow('secure browser-generated call ID');
   });
 
   it('serves the dashboard assets from the real Express composition', async () => {
