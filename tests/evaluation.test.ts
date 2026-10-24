@@ -5,7 +5,7 @@ import { snapshotCoordinatorRun } from '../src/evaluation/coordinatorEvidence.js
 import { evaluateExecution } from '../src/evaluation/evaluator.js';
 import { emptyExecution } from '../src/evaluation/types.js';
 import { runDeterministicEvaluation } from '../src/evaluation/runDeterministic.js';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,7 +14,8 @@ const options = { scenarioId: 'M1' as const, executionId: 'evaluation-run', envi
 
 describe('evaluation library with the authoritative coordinator', () => {
   it('collects a real coordinator snapshot without dispatching, emailing, or networking', async () => {
-    const server = await createTaskGateServer({ grantTemplate: grant, operatorPin: 'pin', llmClient: { invoke: vi.fn(async (request) => ({ ok: true, text: JSON.stringify({ state: 'finish', summary: 'done' }), trace: { invocationId: '00000000-0000-4000-8000-000000000002', provider: 'fixture', model: 'fixture', requestedModel: 'fixture', promptVersion: request.promptVersion, role: request.role, runMode: 'scripted_gateway', attempts: 1, status: 'succeeded', durationMs: 0, startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:00:00.000Z' } })) } });
+    const root = await mkdtemp(join(tmpdir(), 'taskgate-evaluation-isolated-'));
+    const server = await createTaskGateServer({ grantTemplate: grant, auditPath: join(root, 'audit.jsonl'), operatorPin: 'pin', llmClient: { invoke: vi.fn(async (request) => ({ ok: true, text: JSON.stringify({ state: 'finish', summary: 'done' }), trace: { invocationId: '00000000-0000-4000-8000-000000000002', provider: 'fixture', model: 'fixture', requestedModel: 'fixture', promptVersion: request.promptVersion, role: request.role, runMode: 'scripted_gateway', attempts: 1, status: 'succeeded', durationMs: 0, startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:00:00.000Z' } })) } });
     try {
       server.grantStore.create(grant);
       const run = await server.workflows.start('compare quote A and quote B');
@@ -31,7 +32,7 @@ describe('evaluation library with the authoritative coordinator', () => {
       expect(events.filter((event) => event.kind === 'quotation').every((event) => event.sourceSha256 && event.receiptId)).toBe(true);
       expect(events.some((event) => event.kind === 'planner_proposal')).toBe(false);
       expect(evaluateExecution(collected).integratedQualified).toBe(false);
-    } finally { await server.close(); }
+    } finally { await server.close(); await rm(root,{recursive:true,force:true}); }
   });
 
   it('projects receipts without credentials or adapter outcomes and rejects absent evidence conservatively', async () => {

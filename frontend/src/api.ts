@@ -11,7 +11,8 @@ export type Dispatch = { decision: {decision: 'allow'|'block'|'request_approval'
 export type UploadSession={sessionId:string;capability:string;expiresAt:string;maxDocuments:number};
 export type UploadCorrectionDraft={supplier:string;item:string;quantity:string;quantityUnit:string;unitPrice:string;currency:string;leadTimeDays:string;paymentTerms:string;documentText?:string};
 export type UploadedDocument={documentId:string;status:'needs_confirmation'|'confirmed';originalSha256:string;normalizedSha256?:string;errors:string[];correctionDraft?:UploadCorrectionDraft;extraction?:{supplier:string;item:string;quantity:number;quantityUnit:'each'|'kg';unitPrice:number|string;currency:string;leadTimeDays:number;paymentTerms:string};trustLabel:'untrusted_document'};
-export type UploadedTask={taskId:string;grantVersion:string;grantConfirmed:boolean;aliases:string[];createdAt:string};
+export type UploadedTask={taskId:string;grantVersion:string;grantConfirmed:boolean;aliases:string[];createdAt:string;preflightDecision:'ALLOW'|'REVIEW'|'BLOCK'};
+export type PreflightAssessment={taskId:string;decision:'ALLOW'|'REVIEW'|'BLOCK';inspectionVersion:string;documents:Array<{documentId:string;alias:string;decision:'ALLOW'|'REVIEW'|'BLOCK';sourceSha256:string;findings:Array<{category:string;severity:string;ruleId:string;explanation:string;location:string;resultStatus:string;recommendedHandling:string}>}>};
 
 async function request<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<ApiResult<T>> {
   try {
@@ -40,5 +41,6 @@ export const api = {
   uploadDocument:(session:UploadSession,file:File)=>request<UploadedDocument>(`/api/uploads/sessions/${encodeURIComponent(session.sessionId)}/documents`,{method:'POST',headers:{'X-Upload-Capability':session.capability,'X-Upload-Filename':file.name,'Content-Type':file.type||'application/octet-stream'},body:file}),
   confirmDocument:(session:UploadSession,id:string,fields:NonNullable<UploadedDocument['extraction']> & {documentText?:string})=>request<UploadedDocument>(`/api/uploads/sessions/${encodeURIComponent(session.sessionId)}/documents/${encodeURIComponent(id)}/confirm`,{method:'POST',headers:{'X-Upload-Capability':session.capability},body:json(fields)}),
   bindUploadedTask:(session:UploadSession,ids:string[],operatorPin:string)=>request<UploadedTask>(`/api/uploads/sessions/${encodeURIComponent(session.sessionId)}/bind-task`,{method:'POST',headers:{'X-Upload-Capability':session.capability},body:json({documentIds:ids,operatorPin})}),
-  startUploadedRun:(session:UploadSession,taskId:string,goal:string,operatorPin:string)=>request<Run>(`/api/uploads/sessions/${encodeURIComponent(session.sessionId)}/tasks/${encodeURIComponent(taskId)}/run`,{method:'POST',headers:{'X-Upload-Capability':session.capability},body:json({goal,operatorPin})})
+  startUploadedRun:(session:UploadSession,taskId:string,goal:string,operatorPin:string)=>request<Run>(`/api/uploads/sessions/${encodeURIComponent(session.sessionId)}/tasks/${encodeURIComponent(taskId)}/run`,{method:'POST',headers:{'X-Upload-Capability':session.capability},body:json({goal,operatorPin})}),
+  getPreflight:(session:UploadSession,taskId:string,pin:string)=>request<PreflightAssessment>(`/api/uploads/sessions/${encodeURIComponent(session.sessionId)}/tasks/${encodeURIComponent(taskId)}/preflight`,{headers:{'X-Upload-Capability':session.capability,'X-Operator-Pin':pin}})
 };

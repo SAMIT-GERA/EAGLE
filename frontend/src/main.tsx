@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, type ApiResult, type ClaimResult, type Dispatch, type Grant, type Receipt, type Run, type UploadCorrectionDraft, type UploadSession, type UploadedDocument, type UploadedTask } from './api';
+import { api, type ApiResult, type ClaimResult, type Dispatch, type Grant, type PreflightAssessment, type Receipt, type Run, type UploadCorrectionDraft, type UploadSession, type UploadedDocument, type UploadedTask } from './api';
 import { buildCorrection, correctionFor, stageOneMessage, uploadedTaskReady } from './stageOne';
 import './styles.css';
 import './app.css';
@@ -16,6 +16,7 @@ function Guided({leave}:{leave():void}) {
  const [mode,setMode]=useState<'sample'|'upload'>();
  const [step,setStep]=useState(0), [pin,setPin]=useState(''), [grant,setGrant]=useState<Grant>(), [run,setRun]=useState<Run>(), [response,setResponse]=useState<ApiResult<unknown>>(), [busy,setBusy]=useState(false), [deleteResult,setDeleteResult]=useState<Dispatch>(), [approvalId,setApprovalId]=useState<string>(), [directCall,setDirectCall]=useState<{taskId:string;callId:string}>(), [receipts,setReceipts]=useState<Receipt[]>([]), [claim,setClaim]=useState<ClaimResult>(), [evidence,setEvidence]=useState<{taskId:string;callId:string;canonicalRecipient:string;subjectDigest:string;bodyDigest:string}>(),[session,setSession]=useState<UploadSession>(),[docs,setDocs]=useState<UploadedDocument[]>([]),[uploadedTask,setUploadedTask]=useState<UploadedTask>();
  const [corrections,setCorrections]=useState<Record<string,UploadCorrectionDraft>>({}),[sampleLookupError,setSampleLookupError]=useState<string>();
+ const [preflight,setPreflight]=useState<PreflightAssessment>();
  const controller=useRef<AbortController | undefined>(undefined); const canContinue=step===0?(mode==='sample'?grant?.confirmed===true:mode==='upload'?uploadedTaskReady(docs,uploadedTask):false):step===1?!!run:step===2?!!run?.comparison:step===3?!!deleteResult||!!approvalId:true;
  const activeTaskId=mode==='upload'?uploadedTask?.taskId:mode==='sample'?grant?.taskId:undefined;
  const capability=mode==='upload'?session?.capability:undefined;
@@ -27,8 +28,8 @@ function Guided({leave}:{leave():void}) {
  const selectFiles=async(files:FileList|null)=>{if(!files)return;let s=session;if(!s){const r=await api.createUploadSession();setResponse(r);if(!r.ok)return;s=r.data;setSession(s)}for(const f of Array.from(files).slice(0,2-docs.length)){if(f.size>2*1024*1024){setResponse({ok:false,status:400,error:'File exceeds 2 MB',kind:'backend'});continue;}const r=await api.uploadDocument(s,f);setResponse(r);if(r.ok){setDocs(d=>[...d,r.data]);const draft=correctionFor(r.data);if(draft)setCorrections(current=>({...current,[r.data.documentId]:draft}))}}};
  const updateCorrection=(id:string,field:keyof UploadCorrectionDraft,value:string)=>setCorrections(current=>({...current,[id]:{...current[id]!,[field]:value}}));
  const confirmUpload=async(d:UploadedDocument)=>{if(!session)return;const draft=corrections[d.documentId]??correctionFor(d);if(!draft){setResponse({ok:false,status:400,error:'This file has no editable quotation fields. Start a new upload session with valid JSON or TXT.',kind:'backend'});return;}const input=buildCorrection(draft);if(!input.ok){setResponse({ok:false,status:400,error:input.error,kind:'backend'});return;}setBusy(true);const r=await api.confirmDocument(session,d.documentId,input.value);setResponse(r);if(r.ok&&r.data.status==='confirmed'&&r.data.normalizedSha256)setDocs(x=>x.map(v=>v.documentId===d.documentId?r.data:v));setBusy(false);};
- const bind=async()=>{if(!session||!pin||docs.length!==2||docs.some(d=>d.status!=='confirmed'||!d.normalizedSha256))return;setBusy(true);const r=await api.bindUploadedTask(session,docs.map(d=>d.documentId),pin);if(r.ok&&r.data.grantConfirmed===true)setUploadedTask(r.data);setResponse(r.ok&&r.data.grantConfirmed!==true?{ok:false,status:409,error:'The server did not confirm an active uploaded-task grant.',kind:'security'}:r);setBusy(false);};
- const restartUpload=()=>{setSession(undefined);setDocs([]);setCorrections({});setUploadedTask(undefined);setResponse(undefined)};
+ const bind=async()=>{if(!session||!pin||docs.length!==2||docs.some(d=>d.status!=='confirmed'||!d.normalizedSha256))return;setBusy(true);const r=await api.bindUploadedTask(session,docs.map(d=>d.documentId),pin);if(r.ok&&r.data.grantConfirmed===true){setUploadedTask(r.data);const assessment=await api.getPreflight(session,r.data.taskId,pin);if(assessment.ok)setPreflight(assessment.data);else setResponse(assessment);}else setResponse(r.ok?{ok:false,status:409,error:'The server did not confirm an active uploaded-task grant.',kind:'security'}:r);setBusy(false);};
+ const restartUpload=()=>{setSession(undefined);setDocs([]);setCorrections({});setUploadedTask(undefined);setPreflight(undefined);setResponse(undefined)};
  const deny=()=>activeTaskId&&act(()=>api.tool({taskId:activeTaskId,callId:callId('guided-delete'),tool:'delete_quote',args:{fileId:'quote-A'}},capability),setDeleteResult);
  const approveWorkflow=async()=>{ const pending=run?.pendingCall??directCall; if(!pending||!pin)return; setBusy(true); const granted=await api.approve(pending.taskId,pending.callId,pin); setResponse(granted); if(granted.ok){setApprovalId(granted.data.approvalId); if(run?.pendingCall){const resumed=await api.resume(run.runId,granted.data.approvalId,pin,capability);setResponse(resumed);if(resumed.ok)setRun(resumed.data)}else {const executed=await api.tool({taskId:pending.taskId,callId:pending.callId,tool:'send_clarification_email',args:{recipient:'supplier@example.test',subject:'Clarification requested',body:'Please confirm the stated delivery lead time.'},approvalId:granted.data.approvalId},capability);setResponse(executed);if(executed.ok)setEvidence(toEvidence(executed.data.data));setDirectCall(undefined)} } setBusy(false); };
  const directEmail=()=>{if(!activeTaskId)return;const call={taskId:activeTaskId,callId:callId('guided-email')};void act(()=>api.tool({ ...call,tool:'send_clarification_email',args:{recipient:'supplier@example.test',subject:'Clarification requested',body:'Please confirm the stated delivery lead time.'}},capability),x=>{if(x.decision.decision==='request_approval')setDirectCall(call)});};
@@ -45,7 +46,7 @@ function Guided({leave}:{leave():void}) {
      <button className="quiet" disabled={busy||!!uploadedTask} onClick={()=>{setMode('sample');setRun(undefined);setResponse(undefined)}}>Use sample quotations</button>
      <p>Selected: {mode??'none'}</p></div>
     {mode!==undefined&&<Authority mode={mode} grant={grant} pin={pin} setPin={setPin} confirm={confirm} busy={busy} lookupError={sampleLookupError}/>}
-    {mode==='upload'&&<Upload docs={docs} drafts={corrections} update={updateCorrection} choose={selectFiles} confirm={confirmUpload} bind={bind} restart={restartUpload} task={uploadedTask} pinReady={!!pin} busy={busy}/>}
+    {mode==='upload'&&<Upload docs={docs} drafts={corrections} update={updateCorrection} choose={selectFiles} confirm={confirmUpload} bind={bind} restart={restartUpload} task={uploadedTask} preflight={preflight} pinReady={!!pin} busy={busy}/>}
     <p role="status" className="stage-prerequisite">{stageOneMessage(mode,grant,docs,uploadedTask,!!pin)}</p>
    </>}
    {step===1&&<Execution run={run} start={start} refresh={refreshRun} busy={busy}/>}
@@ -65,7 +66,7 @@ function Authority(p:{mode:'sample'|'upload';grant?:Grant;pin:string;setPin(v:st
   {p.mode==='sample'&&p.lookupError&&<p className="error">Could not load sample grant status: {p.lookupError}</p>}
  </div>;
 }
-function Upload(p:{docs:UploadedDocument[];drafts:Record<string,UploadCorrectionDraft>;update(id:string,field:keyof UploadCorrectionDraft,value:string):void;choose(f:FileList|null):void;confirm(d:UploadedDocument):void;bind():void;restart():void;task?:UploadedTask;pinReady:boolean;busy:boolean}){
+function Upload(p:{docs:UploadedDocument[];drafts:Record<string,UploadCorrectionDraft>;update(id:string,field:keyof UploadCorrectionDraft,value:string):void;choose(f:FileList|null):void;confirm(d:UploadedDocument):void;bind():void;restart():void;task?:UploadedTask;preflight?:PreflightAssessment;pinReady:boolean;busy:boolean}){
  const readyToBind=p.docs.length===2&&p.docs.every(d=>d.status==='confirmed'&&!!d.normalizedSha256)&&p.pinReady&&!p.busy;
  return <div className="panel"><b>Upload my documents</b><p>JSON or TXT only, maximum 2 MB each. Extracted fields are untrusted until you review them and the server confirms your correction.</p>
   <input type="file" accept=".json,.txt,application/json,text/plain" multiple disabled={p.busy||p.docs.length>=2||!!p.task} onChange={e=>p.choose(e.target.files)}/>
@@ -83,6 +84,8 @@ function Upload(p:{docs:UploadedDocument[];drafts:Record<string,UploadCorrection
   </article>})}
   {!p.task&&<><button className="primary" disabled={!readyToBind} onClick={p.bind}>Bind two confirmed documents</button>{p.docs.length>0&&<button className="quiet" disabled={p.busy} onClick={p.restart}>Start a new upload session</button>}</>}
   {p.task?.grantConfirmed&&<p className="ok" role="status">Server-confirmed uploaded task {p.task.taskId}. Grant confirmed ({p.task.grantVersion}); authorized aliases: {p.task.aliases.join(', ')}.</p>}
+  {p.task&&<><p role="status">Document preflight: {p.task.preflightDecision}. Confirmation is not security clearance.</p>{p.preflight?.documents.map(document=><article className="receipt" key={document.documentId}><b>{document.alias}: {document.decision}</b><ul>{document.findings.map((finding,index)=><li key={index}>{finding.ruleId} · {finding.category} · {finding.explanation} ({finding.location})</li>)}</ul></article>)}</>}
+  {p.task&&p.task.preflightDecision!=='ALLOW'&&<button className="quiet" disabled={p.busy} onClick={p.restart}>Start a new upload session after review</button>}
   <p>Uploads and their task binding remain available only while this server session is alive.</p>
  </div>;
 }

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
@@ -61,6 +61,12 @@ export class QuotationUploadStore {
  list(id:string, capability:string){return [...this.session(id,capability).records.values()].filter(r=>r.status==='confirmed').map(r=>this.view(r));}
  trustedConfirmed(id:string, capability:string, documentIds:readonly string[]){const s=this.session(id,capability);if(documentIds.length!==2||new Set(documentIds).size!==2)throw new Error('Exactly two distinct confirmed documents are required');return documentIds.map(documentId=>{const r=s.records.get(documentId);if(!r||r.status!=='confirmed'||!r.extracted||!r.normalizedSha256||hashNormalizedUploadQuotation(r.extracted)!==r.normalizedSha256)throw new Error('Document is not confirmed or its metadata changed');return Object.freeze({documentId:r.documentId,originalSha256:r.originalSha256,normalizedSha256:r.normalizedSha256,quotation:Object.freeze(structuredClone(r.extracted))});});}
  viewRecord(id:string,capability:string,doc:string){const r=this.session(id,capability).records.get(doc);if(!r)throw new Error('Unknown uploaded document');return this.view(r);}
+ async inspectionInput(id:string,capability:string,documentId:string){
+  const r=this.session(id,capability).records.get(documentId);
+  if(!r||r.status!=='confirmed'||!r.extracted||!r.normalizedSha256)throw new Error('Confirmed document unavailable');
+  const bytes=await readFile(r.path);
+  return Object.freeze({documentId:r.documentId,originalSha256:r.originalSha256,computedOriginalSha256:digest(bytes),normalizedSha256:r.normalizedSha256,computedNormalizedSha256:hashNormalizedUploadQuotation(r.extracted),content:new TextDecoder('utf-8',{fatal:true}).decode(bytes),quotation:structuredClone(r.extracted)});
+ }
   private view(r:StoredRecord){return {documentId:r.documentId,status:r.status,uploadedAt:r.uploadedAt,originalSha256:r.originalSha256,...(r.normalizedSha256?{normalizedSha256:r.normalizedSha256}:{}),...(r.extracted?{extraction:{supplier:r.extracted.supplier,item:r.extracted.item,quantity:r.extracted.quantity,quantityUnit:r.extracted.quantityUnit,unitPrice:r.extracted.unitPrice,currency:r.extracted.currency,leadTimeDays:r.extracted.leadTimeDays,paymentTerms:r.extracted.paymentTerms}}:{}),...(r.status==='needs_confirmation'&&r.correctionDraft?{correctionDraft:{...r.correctionDraft}}:{}),errors:[...r.errors],trustLabel:'untrusted_document' as const};}
  async close(){this.sessions.clear();await rm(await this.root,{recursive:true,force:true});}
 }

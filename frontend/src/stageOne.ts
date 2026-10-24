@@ -36,7 +36,7 @@ export function buildCorrection(draft: UploadCorrectionDraft):
 
 export function uploadedTaskReady(documents: readonly UploadedDocument[], task: UploadedTask | undefined): boolean {
   return documents.length === 2 && documents.every(document => document.status === 'confirmed' && /^[0-9a-f]{64}$/.test(document.normalizedSha256 ?? '')) &&
-    task?.grantConfirmed === true && task.taskId.length > 0 && task.grantVersion.length > 0 &&
+    task?.grantConfirmed === true && task.preflightDecision === 'ALLOW' && task.taskId.length > 0 && task.grantVersion.length > 0 &&
     task.aliases.length === 2 && task.aliases.includes('quote-A') && task.aliases.includes('quote-B');
 }
 
@@ -44,6 +44,8 @@ export function stageOneMessage(mode: StageOneMode, grant: Grant | undefined, do
   if (mode === undefined) return 'Choose a sample or uploaded-document workflow to begin.';
   if (mode === 'sample') return grant?.confirmed ? 'Sample grant confirmed by the server. Continue to the agent workflow.' : hasPin ? 'Confirm the sample grant with your operator PIN before continuing.' : 'Enter the operator PIN, then confirm the sample grant.';
   if (task && uploadedTaskReady(documents, task)) return `Uploaded task ${task.taskId} has a server-confirmed grant (${task.grantVersion}). Continue to agent execution.`;
+  if (task?.preflightDecision === 'REVIEW' || task?.preflightDecision === 'BLOCK') return `Uploaded task ${task.taskId} ${task.preflightDecision === 'REVIEW' ? 'requires security review' : 'is blocked'} by document preflight. Confirmed fields do not authorize model disclosure; start a new upload session after reviewing sanitized findings.`;
+  if (task && task.preflightDecision !== 'ALLOW') return 'Document preflight is unavailable. Operational agent disclosure is denied.';
   if (documents.length < 2) return `Upload two quotations. ${documents.length} of 2 uploaded.`;
   const confirmed = documents.filter(document => document.status === 'confirmed' && document.normalizedSha256).length;
   if (confirmed < 2) return `${confirmed} of 2 quotations confirmed by the server. Review and correct the remaining fields.`;

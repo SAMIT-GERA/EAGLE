@@ -5,7 +5,7 @@ import { buildCorrection, correctionFor, stageOneMessage, uploadedTaskReady } fr
 const digest = 'a'.repeat(64);
 const draft = { supplier: 'ORBIT', item: 'workstations', quantity: '10', quantityUnit: 'units', unitPrice: '71300', currency: 'INR', leadTimeDays: '3', paymentTerms: 'Net 17' };
 const document = (id: string, status: UploadedDocument['status']): UploadedDocument => ({ documentId: id, status, originalSha256: digest, ...(status === 'confirmed' ? { normalizedSha256: digest } : {}), errors: [], trustLabel: 'untrusted_document' });
-const task: UploadedTask = { taskId: 'upload-task', grantVersion: 'upload-v1', grantConfirmed: true, aliases: ['quote-A', 'quote-B'], createdAt: '2026-10-24T00:00:00Z' };
+const task: UploadedTask = { taskId: 'upload-task', grantVersion: 'upload-v1', grantConfirmed: true, aliases: ['quote-A', 'quote-B'], createdAt: '2026-10-24T00:00:00Z', preflightDecision: 'ALLOW' };
 const grant: Grant = { taskId: 'demo-task', version: 'v1', confirmed: true, approvedFileIds: ['quote-A', 'quote-B'], permittedTools: ['read_quote'], prohibitedOperations: ['delete'], approvalEligibleTools: [] };
 
 describe('Stage 1 view state', () => {
@@ -24,6 +24,8 @@ describe('Stage 1 view state', () => {
     expect(uploadedTaskReady(confirmed, undefined)).toBe(false);
     expect(uploadedTaskReady(confirmed, { ...task, grantConfirmed: false })).toBe(false);
     expect(uploadedTaskReady(confirmed, task)).toBe(true);
+    expect(uploadedTaskReady(confirmed, { ...task, preflightDecision: 'REVIEW' })).toBe(false);
+    expect(stageOneMessage('upload', grant, confirmed, { ...task, preflightDecision: 'BLOCK' }, true)).toContain('model disclosure');
     expect(stageOneMessage('upload', grant, confirmed, undefined, false)).toContain('sample grant is not required');
     expect(stageOneMessage('upload', grant, confirmed, task, true)).toContain('server-confirmed grant');
   });

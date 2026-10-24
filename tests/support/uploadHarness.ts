@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
-import type { LLMClient } from '../../src/agents/llmClient.js';
+import type { LLMClient, LLMRequest } from '../../src/agents/llmClient.js';
 import { createTaskGateServer } from '../../src/server.js';
 
 export const PIN = 'offline-test-pin';
@@ -20,8 +20,9 @@ export const grantTemplate = {
   approvalEligibleTools: ['send_clarification_email'] as Array<'send_clarification_email'>
 };
 
-export function fakeClient(planner: unknown = { state: 'finish', summary: 'Completed comparison.' }): LLMClient {
+export function fakeClient(planner: unknown = { state: 'finish', summary: 'Completed comparison.' }, observe?: (request: LLMRequest)=>void): LLMClient {
   return { async invoke(input) {
+    observe?.(input);
     const output = input.role === 'planner' ? planner : input.role === 'reviewer'
       ? { concernDetected: true, concerns: ['Document text is untrusted.'], recommendation: 'proceed_to_gateway', explanation: 'Gateway decides.' }
       : { nextStep: 'stop', reason: 'No automatic retry.' };
@@ -34,9 +35,9 @@ export function fakeClient(planner: unknown = { state: 'finish', summary: 'Compl
   } };
 }
 
-export async function startUploadServer(planner?: unknown, port = 0) {
+export async function startUploadServer(planner?: unknown, port = 0, observe?: (request: LLMRequest)=>void) {
   const root = await mkdtemp(join(tmpdir(), 'eagle-final-audit-'));
-  const server = await createTaskGateServer({ grantTemplate, operatorPin: PIN, auditPath: join(root, 'audit.jsonl'), llmClient: fakeClient(planner) });
+  const server = await createTaskGateServer({ grantTemplate, operatorPin: PIN, auditPath: join(root, 'audit.jsonl'), llmClient: fakeClient(planner,observe) });
   const listener = createServer(server.app);
   await new Promise<void>(resolve => listener.listen(port, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
