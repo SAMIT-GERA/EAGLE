@@ -17,6 +17,13 @@ describe('guided API client', () => {
     await api.receipts('pin');
     expect(fetcher.mock.calls[0][1].headers['X-Operator-Pin']).toBe('pin');
   });
+  it('uses the operator PIN only for the controlled adversarial test endpoint', async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(200, { mode:'CONTROLLED_ADVERSARIAL_TEST' }));
+    vi.stubGlobal('fetch', fetcher);
+    await api.controlledAdversarialTest('operator-pin');
+    expect(fetcher.mock.calls[0][0]).toBe('/api/security/controlled-adversarial-test');
+    expect(fetcher.mock.calls[0][1].headers['X-Operator-Pin']).toBe('operator-pin');
+  });
   it('distinguishes policy denial from network failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(403, { error:'Denied by policy' })));
     const denied = await api.tool({taskId:'demo',callId:'fresh-call',tool:'delete_quote',args:{fileId:'quote-A'}});
