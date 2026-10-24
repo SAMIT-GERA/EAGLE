@@ -28,6 +28,7 @@ import { createGeminiClient } from './agents/geminiClient.js';
 import type { LLMClient } from './agents/llmClient.js';
 import { AgentWorkflowCoordinator } from './workflows/agentWorkflow.js';
 import { QuotationUploadStore, correctionSchema } from './documents/quotationUploads.js';
+import { UploadTaskBindings } from './documents/taskBindings.js';
 
 type ReceiptStore = Awaited<ReturnType<typeof createReceiptStore>>;
 
@@ -51,6 +52,7 @@ export type ComposedTaskGateServer = {
   adapters: ControlledAdapterWiring;
   workflows: AgentWorkflowCoordinator;
   uploads: QuotationUploadStore;
+  uploadBindings: UploadTaskBindings;
   close(): Promise<void>;
 };
 
@@ -102,11 +104,13 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     approvalService,
     audit: auditStore.audit
   };
+  const uploadBindings = new UploadTaskBindings();
   const dispatcher = new GatewayDispatcher(dependencies, {
     grantStore,
     capabilityRegistry,
     adapters,
-    pendingApprovalMetadata
+    pendingApprovalMetadata,
+    resolveQuote: (taskId, alias) => { const binding = uploadBindings.get(taskId); if (!binding) return undefined; const quote = uploadBindings.read(taskId, alias); if (!quote) throw new Error('Bound upload unavailable'); return quote; }
   });
   const claimVerifier = createClaimVerifier({
     audit: auditStore.audit,
@@ -151,6 +155,8 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
   app.get('/api/uploads/sessions/:sessionId/documents', (request,response)=>{try{response.json(uploads.list(request.params.sessionId,uploadCapability(request)));}catch{response.status(404).json({error:'Upload session not found'});}});
   app.get('/api/uploads/sessions/:sessionId/documents/:documentId', (request,response)=>{try{response.json(uploads.viewRecord(request.params.sessionId,uploadCapability(request),request.params.documentId));}catch{response.status(404).json({error:'Uploaded document not found'});}});
   app.post('/api/uploads/sessions/:sessionId/documents/:documentId/confirm', json({limit:'16kb',strict:true}), (request,response)=>{const input=correctionSchema.safeParse(request.body);if(!input.success){response.status(400).json({error:'Invalid quotation correction'});return;}try{response.json(uploads.confirm(request.params.sessionId,uploadCapability(request),request.params.documentId,input.data));}catch{response.status(404).json({error:'Uploaded document not found'});}});
+  const bindSchema=z.object({documentIds:z.array(z.string().uuid()).length(2),operatorPin:z.string().min(1)}).strict();
+  app.post('/api/uploads/sessions/:sessionId/bind-task',json({limit:'2kb',strict:true}),(request,response)=>{const input=bindSchema.safeParse(request.body);if(!input.success||!sameSecret(input.success?input.data.operatorPin:undefined,operatorPin)){response.status(401).json({error:'Operator authentication required'});return;}try{const binding=uploadBindings.create(uploads,request.params.sessionId,uploadCapability(request),input.data.documentIds);const grant=grantStore.create({...grantTemplate,taskId:binding.taskId,version:'upload-v1',confirmed:true,approvedFileIds:['quote-A','quote-B']}).grant;response.status(201).json({taskId:binding.taskId,grantVersion:grant.version,aliases:['quote-A','quote-B'],createdAt:binding.createdAt});}catch{response.status(400).json({error:'Unable to bind confirmed upload documents'});}});
 
   app.post('/api/tool-call', json({ limit: '16kb', strict: true }), async (request, response) => {
     const parsed = toolCallEnvelopeSchema.safeParse(request.body);
@@ -257,6 +263,7 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     adapters,
     workflows,
     uploads,
+    uploadBindings,
     close: async () => { await uploads.close(); await auditStore.close(); }
   };
 }

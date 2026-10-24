@@ -12,6 +12,7 @@ export type GatewayRuntime = {
   capabilityRegistry: CapabilityRegistry;
   adapters: ControlledAdapterWiring;
   pendingApprovalMetadata?: PendingApprovalMetadataStore;
+  resolveQuote?: (taskId: string, fileId: 'quote-A' | 'quote-B') => unknown | undefined;
 };
 
 export class GatewayConfigurationError extends Error {
@@ -152,7 +153,7 @@ export class GatewayDispatcher {
 
       let data;
       try {
-        data = this.runtime.adapters.resolveQuoteReader(capability.adapter.adapterId).read(parsedRead.data.fileId);
+        data = this.runtime.resolveQuote?.(call.taskId, parsedRead.data.fileId) ?? this.runtime.adapters.resolveQuoteReader(capability.adapter.adapterId).read(parsedRead.data.fileId);
       } catch {
         try {
           const receipt = await this.deps.audit.recordOutcome({ preliminaryReceipt, status: 'failed', adapterOutcome: 'quote_reader_failed' });
