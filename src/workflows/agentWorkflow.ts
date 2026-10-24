@@ -104,9 +104,10 @@ export class AgentWorkflowCoordinator {
   list(): readonly WorkflowRun[] { return Object.freeze([...this.runs.values()].map(snapshot)); }
   evaluationEvents(runId: string): readonly CoordinatorEvidenceEvent[] { return this.evidence.get(runId)?.snapshot() ?? Object.freeze([]); }
 
-  async start(goal: unknown): Promise<WorkflowRun> {
+  async start(goal: unknown): Promise<WorkflowRun> { return this.startForTask(goal, this.deps.taskId); }
+  async startForTask(goal: unknown, trustedTaskId: string): Promise<WorkflowRun> {
     if (typeof goal !== 'string' || goal.trim().length === 0 || goal.length > 1_000) throw new Error('Invalid workflow goal');
-    const active = this.deps.grantStore.resolve(this.deps.taskId).record?.grant;
+    const active = this.deps.grantStore.resolve(trustedTaskId).record?.grant;
     if (active === undefined || !active.confirmed) throw new Error('No active confirmed grant is available');
     const runId = randomUUID();
     let run: WorkflowRun = {
