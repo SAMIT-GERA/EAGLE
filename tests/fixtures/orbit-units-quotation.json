@@ -1,0 +1,12 @@
+{
+  "supplier": "ORBIT TEST SUPPLIER",
+  "item": {
+    "name": "workstations",
+    "quantity": 10,
+    "quantityUnit": "units",
+    "unitPrice": "71300"
+  },
+  "currency": "INR",
+  "leadTimeDays": 3,
+  "paymentTerms": "Net 17"
+}
