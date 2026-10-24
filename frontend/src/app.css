@@ -5,3 +5,4 @@
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}.eye-pupil{transition:none}}
 .hero{grid-template-columns:minmax(0,.88fr) minmax(410px,1.12fr);gap:clamp(18px,3vw,58px)}.hero-copy{position:relative;z-index:1;max-width:650px}.hero h1{font-size:clamp(51px,6.2vw,106px);line-height:.79}.lede{max-width:450px;font-size:19px}.eye-lid,.eye-brow{fill:var(--ink)}.eye-mark{fill:var(--orange)}
 @media(max-width:900px){.hero{grid-template-columns:1fr}.hero-copy{max-width:600px}}
+.bind-control{display:grid;gap:9px}.bind-status{max-width:440px;margin:0;color:var(--muted);font-size:12px;line-height:1.45}

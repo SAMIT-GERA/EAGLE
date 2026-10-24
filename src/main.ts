@@ -5,8 +5,13 @@ const port = Number(portValue);
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error('PORT must be a valid TCP port number.');
 }
+const operatorPin = process.env.OPERATOR_PIN?.trim();
+if (!operatorPin) {
+  throw new Error('OPERATOR_PIN must be configured before starting TaskGate.');
+}
 
 const server = await createTaskGateServer({
+  operatorPin,
   grantTemplate: {
     taskId: 'demo-task',
     version: 'v1',

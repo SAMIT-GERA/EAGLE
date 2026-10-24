@@ -13,6 +13,9 @@ describe('Stage 1 operator authorization and quotation correction', () => {
       const headers = { 'X-Upload-Capability': session.capability };
       expect((await app.request('POST', `/api/uploads/sessions/${session.sessionId}/documents/${firstId}/confirm`, ORBIT, headers)).status).toBe(200);
       expect((await app.request('POST', `/api/uploads/sessions/${session.sessionId}/documents/${secondId}/confirm`, NEBULA, headers)).status).toBe(200);
+      expect((await app.request('GET', '/api/grant')).status).toBe(404);
+      expect((await app.request('POST', `/api/uploads/sessions/${session.sessionId}/bind-task`, { documentIds: [firstId, secondId] }, headers)).status).toBe(401);
+      expect((await app.request('POST', `/api/uploads/sessions/${session.sessionId}/bind-task`, { documentIds: [firstId, secondId], operatorPin: 'wrong' }, headers)).status).toBe(401);
       expect(await app.request('POST', `/api/uploads/sessions/${session.sessionId}/bind-task`, { documentIds: [firstId, secondId], operatorPin: PIN }, headers)).toMatchObject({ status: 201, data: { grantConfirmed: true, preflightDecision: 'ALLOW' } });
     } finally { await app.close(); }
   });

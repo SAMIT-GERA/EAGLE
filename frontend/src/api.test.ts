@@ -24,6 +24,16 @@ describe('guided API client', () => {
     expect(fetcher.mock.calls[0][0]).toBe('/api/security/controlled-adversarial-test');
     expect(fetcher.mock.calls[0][1].headers['X-Operator-Pin']).toBe('operator-pin');
   });
+  it('sends uploaded-task authentication in the required JSON body, not an operator header', async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(201, { taskId:'upload-task', grantVersion:'upload-v1', grantConfirmed:true, aliases:['quote-A','quote-B'], createdAt:'2026-10-24T00:00:00Z', preflightDecision:'ALLOW' }));
+    vi.stubGlobal('fetch', fetcher);
+    await api.bindUploadedTask({sessionId:'session',capability:'capability',expiresAt:'2026-10-24T01:00:00Z',maxDocuments:2},['doc-a','doc-b'],'configured-pin');
+    const init = fetcher.mock.calls[0]?.[1] as RequestInit;
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/uploads/sessions/session/bind-task');
+    expect(JSON.parse(String(init.body))).toEqual({documentIds:['doc-a','doc-b'],operatorPin:'configured-pin'});
+    expect(init.headers).toMatchObject({'X-Upload-Capability':'capability'});
+    expect(init.headers).not.toHaveProperty('X-Operator-Pin');
+  });
   it('distinguishes policy denial from network failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(403, { error:'Denied by policy' })));
     const denied = await api.tool({taskId:'demo',callId:'fresh-call',tool:'delete_quote',args:{fileId:'quote-A'}});
