@@ -27,6 +27,7 @@ import { registerSecurityRoutes } from './security/operatorRoutes.js';
 import { createGeminiClient } from './agents/geminiClient.js';
 import type { LLMClient } from './agents/llmClient.js';
 import { AgentWorkflowCoordinator } from './workflows/agentWorkflow.js';
+import { QuotationUploadStore, correctionSchema } from './documents/quotationUploads.js';
 
 type ReceiptStore = Awaited<ReturnType<typeof createReceiptStore>>;
 
@@ -49,6 +50,7 @@ export type ComposedTaskGateServer = {
   pendingApprovalMetadata: PendingApprovalMetadataStore;
   adapters: ControlledAdapterWiring;
   workflows: AgentWorkflowCoordinator;
+  uploads: QuotationUploadStore;
   close(): Promise<void>;
 };
 
@@ -112,6 +114,7 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     listUnresolvedDispatches: auditStore.listUnresolvedDispatches
   });
   const workflows = new AgentWorkflowCoordinator({ client: options.llmClient ?? createGeminiClient(), gateway: dispatcher, grantStore, claimVerifier, taskId: grantTemplate.taskId });
+  const uploads = new QuotationUploadStore();
   const app = express();
 
   app.use(express.static(fileURLToPath(new URL('../public/', import.meta.url)), {
@@ -131,6 +134,23 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     }
     response.json({ grant: redactedGrant(grant) });
   });
+
+  // Upload records are deliberately separate from grants and gateway resources.
+  // A random, per-session capability is required on every read/write request.
+  const uploadCapability = (request: Request) => request.get('X-Upload-Capability') ?? '';
+  app.post('/api/uploads/sessions', json({ limit: '1kb', strict: true }), (request, response) => {
+    if (!z.object({}).strict().safeParse(request.body ?? {}).success) { response.status(400).json({ error: 'Invalid upload session request' }); return; }
+    response.status(201).json(uploads.create());
+  });
+  app.post('/api/uploads/sessions/:sessionId/documents', express.raw({ type: '*/*', limit: '2mb' }), async (request, response) => {
+    const filename = request.get('X-Upload-Filename');
+    if (!filename || !Buffer.isBuffer(request.body)) { response.status(400).json({ error: 'Raw upload body and X-Upload-Filename are required' }); return; }
+    try { response.status(201).json(await uploads.upload(request.params.sessionId, uploadCapability(request), filename, request.get('Content-Type')?.split(';')[0] ?? '', request.body)); }
+    catch (error) { const message=error instanceof Error?error.message:'Upload rejected'; response.status(message==='Unknown upload session'?404:message.includes('limit')?413:400).json({error:message}); }
+  });
+  app.get('/api/uploads/sessions/:sessionId/documents', (request,response)=>{try{response.json(uploads.list(request.params.sessionId,uploadCapability(request)));}catch{response.status(404).json({error:'Upload session not found'});}});
+  app.get('/api/uploads/sessions/:sessionId/documents/:documentId', (request,response)=>{try{response.json(uploads.viewRecord(request.params.sessionId,uploadCapability(request),request.params.documentId));}catch{response.status(404).json({error:'Uploaded document not found'});}});
+  app.post('/api/uploads/sessions/:sessionId/documents/:documentId/confirm', json({limit:'16kb',strict:true}), (request,response)=>{const input=correctionSchema.safeParse(request.body);if(!input.success){response.status(400).json({error:'Invalid quotation correction'});return;}try{response.json(uploads.confirm(request.params.sessionId,uploadCapability(request),request.params.documentId,input.data));}catch{response.status(404).json({error:'Uploaded document not found'});}});
 
   app.post('/api/tool-call', json({ limit: '16kb', strict: true }), async (request, response) => {
     const parsed = toolCallEnvelopeSchema.safeParse(request.body);
@@ -236,6 +256,7 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     pendingApprovalMetadata,
     adapters,
     workflows,
-    close: () => auditStore.close()
+    uploads,
+    close: async () => { await uploads.close(); await auditStore.close(); }
   };
 }
