@@ -20,6 +20,14 @@ export function canEnterAgentExecution(mode: 'sample' | 'upload' | undefined, sa
   return mode === 'sample' ? sampleConfirmed : mode === 'upload' && task?.preflightDecision === 'ALLOW' && task.grantConfirmed === true;
 }
 
+export function canAdvanceJourney(stage: number, readiness: { mode: 'sample' | 'upload' | undefined; sampleConfirmed: boolean; task?: UploadedTask; hasRun: boolean; hasEnforcementEvidence: boolean }): boolean {
+  if (stage === 0) return readiness.mode === 'sample' ? readiness.sampleConfirmed : readiness.task !== undefined;
+  if (stage === 1) return canEnterAgentExecution(readiness.mode, readiness.sampleConfirmed, readiness.task);
+  if (stage === 2) return readiness.hasRun;
+  if (stage === 3) return readiness.hasEnforcementEvidence;
+  return false;
+}
+
 export function displayDocumentName(index: number, supplier?: string, item?: string): string {
   const label = supplier?.trim() || `Document ${index + 1}`;
   return item?.trim() ? `${label} — ${item}` : label;

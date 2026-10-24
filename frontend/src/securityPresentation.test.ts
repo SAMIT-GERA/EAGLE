@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canEnterAgentExecution, displayDocumentName, preflightMessage, preflightTone } from './securityPresentation';
+import { canAdvanceJourney, canEnterAgentExecution, displayDocumentName, preflightMessage, preflightTone } from './securityPresentation';
 
 const allowedTask = { taskId:'upload-task', grantVersion:'upload-v1', grantConfirmed:true, aliases:['quote-A','quote-B'], createdAt:'2026-10-24T00:00:00Z', preflightDecision:'ALLOW' as const };
 
@@ -23,5 +23,14 @@ describe('security journey presentation', () => {
   it('uses supplier business names before opaque protocol identifiers', () => {
     expect(displayDocumentName(0,'ORBIT TEST SUPPLIER','workstations')).toBe('ORBIT TEST SUPPLIER — workstations');
     expect(displayDocumentName(1)).toBe('Document 2');
+  });
+
+  it('keeps the journey fail-closed at each security boundary', () => {
+    expect(canAdvanceJourney(0,{mode:'upload',sampleConfirmed:false,hasRun:false,hasEnforcementEvidence:false})).toBe(false);
+    expect(canAdvanceJourney(0,{mode:'upload',sampleConfirmed:false,task:allowedTask,hasRun:false,hasEnforcementEvidence:false})).toBe(true);
+    expect(canAdvanceJourney(1,{mode:'upload',sampleConfirmed:false,task:{...allowedTask,preflightDecision:'BLOCK'},hasRun:false,hasEnforcementEvidence:false})).toBe(false);
+    expect(canAdvanceJourney(1,{mode:'upload',sampleConfirmed:false,task:allowedTask,hasRun:false,hasEnforcementEvidence:false})).toBe(true);
+    expect(canAdvanceJourney(2,{mode:'upload',sampleConfirmed:false,task:allowedTask,hasRun:false,hasEnforcementEvidence:false})).toBe(false);
+    expect(canAdvanceJourney(3,{mode:'upload',sampleConfirmed:false,task:allowedTask,hasRun:true,hasEnforcementEvidence:true})).toBe(true);
   });
 });
