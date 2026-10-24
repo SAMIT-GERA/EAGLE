@@ -34,6 +34,14 @@ describe('guided API client', () => {
     expect(init.headers).toMatchObject({'X-Upload-Capability':'capability'});
     expect(init.headers).not.toHaveProperty('X-Operator-Pin');
   });
+  it('uses the operational uploaded-task run endpoint rather than a synthetic test route', async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(202, { runId:'run-1', taskId:'upload-task', state:'running', traces:[], quotations:[], comparison:{status:'insufficient_evidence'} }));
+    vi.stubGlobal('fetch', fetcher);
+    const session = {sessionId:'session',capability:'capability',expiresAt:'2026-10-24T01:00:00Z',maxDocuments:2};
+    await api.startUploadedRun(session,'upload-task','Compare the confirmed documents.','configured-pin');
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/uploads/sessions/session/tasks/upload-task/run');
+    expect(JSON.parse(String((fetcher.mock.calls[0]?.[1] as RequestInit).body))).toEqual({goal:'Compare the confirmed documents.',operatorPin:'configured-pin'});
+  });
   it('distinguishes policy denial from network failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(403, { error:'Denied by policy' })));
     const denied = await api.tool({taskId:'demo',callId:'fresh-call',tool:'delete_quote',args:{fileId:'quote-A'}});

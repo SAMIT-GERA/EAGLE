@@ -18,6 +18,10 @@ export function retainDocumentsAfterUpload(documents: readonly UploadedDocument[
   return [...documents, result.data];
 }
 
+export function selectedFileNames(files: ArrayLike<{ name: string }>, availableSlots: number): string[] {
+  return Array.from(files).slice(0, Math.max(0, availableSlots)).map(file => file.name);
+}
+
 export function buildCorrection(draft: UploadCorrectionDraft):
   | { ok: true; value: { supplier:string;item:string;quantity:number;quantityUnit:'each'|'kg';unitPrice:string;currency:string;leadTimeDays:number;paymentTerms:string;documentText?:string } }
   | { ok: false; error: string } {

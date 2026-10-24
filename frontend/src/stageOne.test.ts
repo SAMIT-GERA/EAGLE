@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Grant, UploadedDocument, UploadedTask } from './api';
-import { buildCorrection, correctionFor, retainDocumentsAfterUpload, stageOneMessage, uploadedTaskReady } from './stageOne';
+import { buildCorrection, correctionFor, retainDocumentsAfterUpload, selectedFileNames, stageOneMessage, uploadedTaskReady } from './stageOne';
 
 const digest = 'a'.repeat(64);
 const draft = { supplier: 'ORBIT', item: 'workstations', quantity: '10', quantityUnit: 'units', unitPrice: '71300', currency: 'INR', leadTimeDays: '3', paymentTerms: 'Net 17' };
@@ -41,5 +41,10 @@ describe('Stage 1 view state', () => {
     expect(retainDocumentsAfterUpload([first],{ok:false,status:404,kind:'backend',error:'stale upload session'})).toEqual([first]);
     expect(retainDocumentsAfterUpload([first],{ok:true,status:201,data:document('doc-2','needs_confirmation')})).toHaveLength(2);
     expect(retainDocumentsAfterUpload([first,document('doc-2','needs_confirmation')],{ok:true,status:201,data:document('doc-3','needs_confirmation')})).toHaveLength(2);
+  });
+
+  it('keeps the native two-document selection visible without submitting extra files', () => {
+    expect(selectedFileNames([{name:'orbit.json'},{name:'nebula.json'},{name:'third.json'}],2)).toEqual(['orbit.json','nebula.json']);
+    expect(selectedFileNames([{name:'orbit.json'}],0)).toEqual([]);
   });
 });
