@@ -20,7 +20,7 @@ async function request<T>(path: string, init: RequestInit = {}, signal?: AbortSi
     const response = await fetch(path, { ...init, signal, headers: { Accept: 'application/json', ...(init.body ? {'Content-Type':'application/json'} : {}), ...init.headers } });
     const body: unknown = await response.json().catch(() => ({}));
     if (response.ok) return { ok: true, data: body as T, status: response.status };
-    const error = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string' ? body.error : `Request failed (${response.status})`;
+    const error = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string' ? body.error : response.status === 500 ? 'The API proxy or backend failed before returning a safe error. Verify the configured EAGLE backend is running.' : `Request failed (${response.status})`;
     const details = typeof body === 'object' && body !== null && 'errors' in body && Array.isArray(body.errors)
       ? body.errors.filter((item): item is string => typeof item === 'string').slice(0, 4).join('; ') : '';
     return { ok: false, status: response.status, error: details ? `${error}: ${details}` : error, kind: response.status === 401 || response.status === 403 ? 'security' : 'backend' };

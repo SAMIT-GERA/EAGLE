@@ -1,4 +1,4 @@
-import type { Grant, UploadCorrectionDraft, UploadedDocument, UploadedTask } from './api';
+import type { ApiResult, Grant, UploadCorrectionDraft, UploadedDocument, UploadedTask } from './api';
 
 export type StageOneMode = 'sample' | 'upload' | undefined;
 
@@ -10,6 +10,12 @@ export function correctionFor(document: UploadedDocument): UploadCorrectionDraft
     quantityUnit: value.quantityUnit, unitPrice: String(value.unitPrice), currency: value.currency,
     leadTimeDays: String(value.leadTimeDays), paymentTerms: value.paymentTerms
   };
+}
+
+/** Keeps a failed upload from changing the local document scope. Server records remain authoritative. */
+export function retainDocumentsAfterUpload(documents: readonly UploadedDocument[], result: ApiResult<UploadedDocument>): UploadedDocument[] {
+  if (!result.ok || documents.some(document => document.documentId === result.data.documentId) || documents.length >= 2) return [...documents];
+  return [...documents, result.data];
 }
 
 export function buildCorrection(draft: UploadCorrectionDraft):

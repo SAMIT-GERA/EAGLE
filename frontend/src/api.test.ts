@@ -31,4 +31,8 @@ describe('guided API client', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
     expect(await api.grant()).toMatchObject({ok:false,kind:'network',error:'offline'});
   });
+  it('turns a non-JSON proxy 500 into a safe actionable backend message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>proxy error</html>', { status:500, headers:{'Content-Type':'text/html'} })));
+    await expect(api.createUploadSession()).resolves.toMatchObject({ok:false,status:500,kind:'backend',error:expect.stringContaining('proxy or backend')});
+  });
 });

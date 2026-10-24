@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { NEBULA, ORBIT, PIN, startUploadServer } from './support/uploadHarness.js';
 
 describe('Stage 1 operator authorization and quotation correction', () => {
+  it('uploads, confirms, and binds the two valid quotation fixtures into a server-issued task', async () => {
+    const app = await startUploadServer();
+    try {
+      const session = (await app.request('POST', '/api/uploads/sessions', {})).data as { sessionId: string; capability: string };
+      const first = await app.uploadDocument(session.sessionId, session.capability, 'orbit-quotation.json', ORBIT);
+      const second = await app.uploadDocument(session.sessionId, session.capability, 'nebula-quotation.json', NEBULA);
+      expect([first.status, second.status]).toEqual([201, 201]);
+      const firstId = (first.data as { documentId: string }).documentId, secondId = (second.data as { documentId: string }).documentId;
+      const headers = { 'X-Upload-Capability': session.capability };
+      expect((await app.request('POST', `/api/uploads/sessions/${session.sessionId}/documents/${firstId}/confirm`, ORBIT, headers)).status).toBe(200);
+      expect((await app.request('POST', `/api/uploads/sessions/${session.sessionId}/documents/${secondId}/confirm`, NEBULA, headers)).status).toBe(200);
+      expect(await app.request('POST', `/api/uploads/sessions/${session.sessionId}/bind-task`, { documentIds: [firstId, secondId], operatorPin: PIN }, headers)).toMatchObject({ status: 201, data: { grantConfirmed: true, preflightDecision: 'ALLOW' } });
+    } finally { await app.close(); }
+  });
+
   it('requires the real PIN to confirm the sample grant and reports an already-confirmed grant', async () => {
     const app = await startUploadServer();
     try {

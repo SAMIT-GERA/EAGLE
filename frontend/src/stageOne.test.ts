@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Grant, UploadedDocument, UploadedTask } from './api';
-import { buildCorrection, correctionFor, stageOneMessage, uploadedTaskReady } from './stageOne';
+import { buildCorrection, correctionFor, retainDocumentsAfterUpload, stageOneMessage, uploadedTaskReady } from './stageOne';
 
 const digest = 'a'.repeat(64);
 const draft = { supplier: 'ORBIT', item: 'workstations', quantity: '10', quantityUnit: 'units', unitPrice: '71300', currency: 'INR', leadTimeDays: '3', paymentTerms: 'Net 17' };
@@ -33,5 +33,13 @@ describe('Stage 1 view state', () => {
   it('distinguishes an already-confirmed sample grant from missing sample authorization', () => {
     expect(stageOneMessage('sample', undefined, [], undefined, true)).toContain('Confirm the sample grant');
     expect(stageOneMessage('sample', grant, [], undefined, false)).toContain('Sample grant confirmed');
+  });
+
+  it('does not corrupt the local document scope when session creation or an upload fails', () => {
+    const first=document('doc-1','needs_confirmation');
+    expect(retainDocumentsAfterUpload([],{ok:false,status:500,kind:'backend',error:'backend unavailable'})).toEqual([]);
+    expect(retainDocumentsAfterUpload([first],{ok:false,status:404,kind:'backend',error:'stale upload session'})).toEqual([first]);
+    expect(retainDocumentsAfterUpload([first],{ok:true,status:201,data:document('doc-2','needs_confirmation')})).toHaveLength(2);
+    expect(retainDocumentsAfterUpload([first,document('doc-2','needs_confirmation')],{ok:true,status:201,data:document('doc-3','needs_confirmation')})).toHaveLength(2);
   });
 });
