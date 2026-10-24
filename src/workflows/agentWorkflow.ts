@@ -8,6 +8,7 @@ import { consumeReadQuoteResult } from '../agents/quotation.js';
 import type { ObservedQuotation, SourceEvidence } from '../agents/quotation.js';
 import { compareQuotations, toAgentQuotationContext } from '../agents/quoteComparison.js';
 import { bridgeTrustedReadQuote } from '../gateway/quotationBridge.js';
+import type { TrustedUploadedQuoteSource } from '../gateway/quotationBridge.js';
 import type { GatewayDispatcher } from '../gateway/dispatch.js';
 import { GatewayUncertainOutcomeError } from '../gateway/dispatch.js';
 import type { InMemoryGrantStore } from '../gateway/grants.js';
@@ -34,7 +35,7 @@ export type WorkflowComparison = Readonly<{
 export type WorkflowRun = Readonly<{ runId: string; goal: string; taskId: string; state: WorkflowState; pendingCall?: ToolCall; lastResponse?: DispatchResponse; traces: readonly WorkflowTrace[]; quotations: readonly WorkflowQuotation[]; comparison: WorkflowComparison; claim?: ClaimCheck }>;
 
 type ClaimVerifier = { verifyClaim(input: unknown): Promise<ClaimCheck> };
-type Dependencies = { client: LLMClient; gateway: GatewayDispatcher; grantStore: InMemoryGrantStore; claimVerifier: ClaimVerifier; taskId: string };
+type Dependencies = { client: LLMClient; gateway: GatewayDispatcher; grantStore: InMemoryGrantStore; claimVerifier: ClaimVerifier; taskId: string; sourceForRead?: (taskId:string,fileId:'quote-A'|'quote-B')=>TrustedUploadedQuoteSource|undefined };
 
 function cloneCall(call: ToolCall): ToolCall { return { ...call, args: structuredClone(call.args) }; }
 function snapshot(run: WorkflowRun): WorkflowRun { return Object.freeze({ ...run, ...(run.pendingCall ? { pendingCall: cloneCall(run.pendingCall) } : {}), ...(run.lastResponse ? { lastResponse: structuredClone(run.lastResponse) } : {}), quotations: Object.freeze(run.quotations.map((item) => Object.freeze({ ...item, source: Object.freeze({ ...item.source }) }))), comparison: structuredClone(run.comparison), traces: Object.freeze(run.traces.map((entry) => Object.freeze({ ...entry }))) }); }
@@ -140,7 +141,7 @@ export class AgentWorkflowCoordinator {
       ledger.gatewayResponse(response);
       add({ kind: 'gateway', summary: 'Read quote through TaskGate gateway.', decision: response.decision.decision, ruleId: response.decision.ruleId });
       try {
-        const observation = bridgeTrustedReadQuote({ request, grant: active, response });
+        const observation = bridgeTrustedReadQuote({ request, grant: active, response }, this.deps.sourceForRead?.(active.taskId,fileId));
         const consumed = consumeReadQuoteResult({
           action: { tool: 'read_quote', args: { fileId }, purpose: 'Collect trusted quotation evidence.' },
           context: { grant: active }, observation, gatewayKind: 'taskgate', mode: 'scripted_gateway'

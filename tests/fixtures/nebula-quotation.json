@@ -1,0 +1,10 @@
+{
+  "supplier": "NEBULA TEST SUPPLIER",
+  "item": "workstations",
+  "quantity": 10,
+  "quantityUnit": "each",
+  "unitPrice": "64700",
+  "currency": "INR",
+  "leadTimeDays": 19,
+  "paymentTerms": "Net 43"
+}

@@ -117,7 +117,7 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
     findEmailEvidence: auditStore.findEmailEvidence,
     listUnresolvedDispatches: auditStore.listUnresolvedDispatches
   });
-  const workflows = new AgentWorkflowCoordinator({ client: options.llmClient ?? createGeminiClient(), gateway: dispatcher, grantStore, claimVerifier, taskId: grantTemplate.taskId });
+  const workflows = new AgentWorkflowCoordinator({ client: options.llmClient ?? createGeminiClient(), gateway: dispatcher, grantStore, claimVerifier, taskId: grantTemplate.taskId, sourceForRead: (taskId, alias) => uploadBindings.source(taskId, alias) });
   const uploads = new QuotationUploadStore();
   const app = express();
 
@@ -142,6 +142,10 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
   // Upload records are deliberately separate from grants and gateway resources.
   // A random, per-session capability is required on every read/write request.
   const uploadCapability = (request: Request) => request.get('X-Upload-Capability') ?? '';
+  const authorizedUploadedTask = (request: Request, taskId: string) => {
+    const binding = uploadBindings.get(taskId);
+    return binding === undefined || uploads.hasCapability(binding.sessionId, uploadCapability(request));
+  };
   app.post('/api/uploads/sessions', json({ limit: '1kb', strict: true }), (request, response) => {
     if (!z.object({}).strict().safeParse(request.body ?? {}).success) { response.status(400).json({ error: 'Invalid upload session request' }); return; }
     response.status(201).json(uploads.create());
@@ -159,7 +163,7 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
   app.post('/api/uploads/sessions/:sessionId/bind-task',json({limit:'2kb',strict:true}),(request,response)=>{const input=bindSchema.safeParse(request.body);if(!input.success||!sameSecret(input.success?input.data.operatorPin:undefined,operatorPin)){response.status(401).json({error:'Operator authentication required'});return;}try{const binding=uploadBindings.create(uploads,request.params.sessionId,uploadCapability(request),input.data.documentIds);const grant=grantStore.create({...grantTemplate,taskId:binding.taskId,version:'upload-v1',confirmed:true,approvedFileIds:['quote-A','quote-B']}).grant;response.status(201).json({taskId:binding.taskId,grantVersion:grant.version,aliases:['quote-A','quote-B'],createdAt:binding.createdAt});}catch{response.status(400).json({error:'Unable to bind confirmed upload documents'});}});
   const uploadedRunSchema=z.object({goal:z.string().trim().min(1).max(1000),operatorPin:z.string().min(1)}).strict();
   app.post('/api/uploads/sessions/:sessionId/tasks/:taskId/run',json({limit:'16kb',strict:true}),async(request,response)=>{const input=uploadedRunSchema.safeParse(request.body), binding=uploadBindings.get(request.params.taskId);if(!input.success||!sameSecret(input.success?input.data.operatorPin:undefined,operatorPin)){response.status(401).json({error:'Operator authentication required'});return;}if(!binding||binding.sessionId!==request.params.sessionId||!uploads.hasCapability(binding.sessionId,uploadCapability(request))){response.status(404).json({error:'Uploaded task is unavailable'});return;}try{response.status(202).json(await workflows.startForTask(input.data.goal,binding.taskId));}catch{response.status(409).json({error:'Uploaded workflow could not start'});}});
-  app.get('/api/uploads/tasks/:taskId/comparison',(request,response)=>{const binding=uploadBindings.get(request.params.taskId);if(!binding||!uploads.isAlive(binding.sessionId)||!sameSecret(request.get('X-Operator-Pin'),operatorPin)){response.status(404).json({error:'Uploaded task not found'});return;}const run=workflows.list().find(item=>item.taskId===binding.taskId);if(!run){response.status(404).json({error:'Uploaded workflow not found'});return;}response.json({taskId:run.taskId,runId:run.runId,comparison:run.comparison,documents:['quote-A','quote-B'].map(alias=>{const p=uploadBindings.provenance(run.taskId,alias as 'quote-A'|'quote-B')!;return {alias,...p};})});});
+  app.get('/api/uploads/tasks/:taskId/comparison',(request,response)=>{const binding=uploadBindings.get(request.params.taskId);if(!binding||!authorizedUploadedTask(request,binding.taskId)||!sameSecret(request.get('X-Operator-Pin'),operatorPin)){response.status(404).json({error:'Uploaded task not found'});return;}const run=workflows.list().find(item=>item.taskId===binding.taskId);if(!run){response.status(404).json({error:'Uploaded workflow not found'});return;}response.json({taskId:run.taskId,runId:run.runId,comparison:run.comparison,documents:['quote-A','quote-B'].map(alias=>{const p=uploadBindings.provenance(run.taskId,alias as 'quote-A'|'quote-B')!;return {alias,...p};})});});
 
   app.post('/api/tool-call', json({ limit: '16kb', strict: true }), async (request, response) => {
     const parsed = toolCallEnvelopeSchema.safeParse(request.body);
@@ -174,6 +178,7 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
       args: parsed.data.args,
       ...(parsed.data.approvalId === undefined ? {} : { approvalId: parsed.data.approvalId })
     };
+    if (!authorizedUploadedTask(request, call.taskId)) { response.status(404).json({ error: 'Uploaded task not found' }); return; }
     try {
       const result = await dispatcher.dispatchToolCall(call);
       response.json(result);
@@ -203,10 +208,13 @@ export async function createTaskGateServer(options: TaskGateServerOptions): Prom
   app.get('/api/runs/:runId', (request, response) => {
     const run = workflows.get(request.params.runId);
     if (run === undefined) { response.status(404).json({ error: 'Workflow run not found' }); return; }
+    if (!authorizedUploadedTask(request, run.taskId)) { response.status(404).json({ error: 'Workflow run not found' }); return; }
     response.json(run);
   });
   app.post('/api/runs/:runId/resume', json({ limit: '16kb', strict: true }), async (request, response) => {
     if (!sameSecret(request.get('X-Operator-Pin'), operatorPin)) { response.status(401).json({ error: 'Operator authentication required' }); return; }
+    const pendingRun = workflows.get(request.params.runId);
+    if (pendingRun !== undefined && !authorizedUploadedTask(request, pendingRun.taskId)) { response.status(404).json({ error: 'Workflow run not found' }); return; }
     const input = workflowResumeSchema.safeParse(request.body);
     if (!input.success) { response.status(400).json({ error: 'Invalid resume request' }); return; }
     try { response.json(await workflows.resume(request.params.runId, input.data.approvalId)); }

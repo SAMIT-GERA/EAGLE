@@ -1,8 +1,8 @@
 export type ApiFailureKind = 'network' | 'backend' | 'security';
 export type ApiResult<T> = { ok: true; data: T; status: number } | { ok: false; status: number; error: string; kind: ApiFailureKind };
 
-export type Grant = { taskId: string; version: number; confirmed: boolean; approvedFileIds: string[]; permittedTools: string[]; prohibitedOperations: string[]; approvalEligibleTools: string[] };
-export type Receipt = { receiptId: string; taskId: string; callId: string; tool: string; argsDigest: string; grantVersion: number; policyVersion: string; decision: 'allow' | 'block' | 'request_approval'; ruleId: string; executionStatus: 'succeeded' | 'failed' | 'not_executed'; timestamp: string; adapterOutcome: string };
+export type Grant = { taskId: string; version: string; confirmed: boolean; approvedFileIds: string[]; permittedTools: string[]; prohibitedOperations: string[]; approvalEligibleTools: string[] };
+export type Receipt = { receiptId: string; taskId: string; callId: string; tool: string; argsDigest: string; grantVersion: string; policyVersion: string; decision: 'allow' | 'block' | 'request_approval'; ruleId: string; executionStatus: 'succeeded' | 'failed' | 'not_executed'; timestamp: string; adapterOutcome: string };
 export type Run = { runId: string; taskId: string; state: 'running'|'waiting_for_approval'|'completed'|'blocked'|'failed'|'uncertain'; traces: Array<{kind: string; summary: string; decision?: string; ruleId?: string}>; quotations: Array<{fileId: string; accepted: boolean; source: Record<string, unknown>}>; comparison: Comparison; pendingCall?: {taskId: string; callId: string; tool: string}; lastResponse?: {decision: {decision: string; reason: string; ruleId: string}; receipt: Receipt}; claim?: ClaimResult };
 export type Comparison = { status: 'insufficient_evidence'|'incompatible'|'compared'; reason?: string; reasons?: string[]; currency?: string; quantity?: number; quantityUnit?: string; item?: string; absoluteDifference?: string; percentageDifference?: string|null; cheaperFileId?: string|null; fasterFileId?: string|null; tradeoff?: boolean; entries?: Array<{fileId:string; supplier:string; total:string; leadTimeDays:number; paymentTerms:string}> };
 export type ClaimResult = { claimId: string; verdict: 'supported'|'contradiction'|'missing_evidence'; matchingReceiptIds: string[]; explanation: string };
@@ -26,12 +26,12 @@ export const api = {
   grant: () => request<{grant: Grant}>('/api/grant'),
   confirmGrant: (operatorPin: string) => request<{grant: Grant}>('/api/grant/confirm', {method:'POST',body:json({operatorPin})}),
   startRun: (goal: string, signal?: AbortSignal) => request<Run>('/api/agent/run', {method:'POST',body:json({goal})}, signal),
-  getRun: (runId: string, signal?: AbortSignal) => request<Run>(`/api/runs/${encodeURIComponent(runId)}`, {}, signal),
+  getRun: (runId: string, signal?: AbortSignal, capability?: string) => request<Run>(`/api/runs/${encodeURIComponent(runId)}`, capability ? {headers:{'X-Upload-Capability':capability}} : {}, signal),
   pending: (pin: string) => request<PendingApproval[]>('/api/pending-approvals', {headers:{'X-Operator-Pin':pin}}),
   approve: (taskId: string, callId: string, operatorPin: string) => request<{approvalId:string;expiresAt:string}>('/api/approve', {method:'POST',body:json({taskId,callId,operatorPin})}),
-  resume: (runId: string, approvalId: string, pin: string) => request<Run>(`/api/runs/${encodeURIComponent(runId)}/resume`, {method:'POST',headers:{'X-Operator-Pin':pin},body:json({approvalId})}),
-  tool: (call: {taskId:string;callId:string;tool:string;args:unknown;approvalId?:string}) => request<Dispatch>('/api/tool-call', {method:'POST',body:json(call)}),
-  receipts: (pin: string) => request<Receipt[]>('/api/receipts', {headers:{'X-Operator-Pin':pin}}),
+  resume: (runId: string, approvalId: string, pin: string, capability?: string) => request<Run>(`/api/runs/${encodeURIComponent(runId)}/resume`, {method:'POST',headers:{'X-Operator-Pin':pin,...(capability?{'X-Upload-Capability':capability}:{})},body:json({approvalId})}),
+  tool: (call: {taskId:string;callId:string;tool:string;args:unknown;approvalId?:string}, capability?: string) => request<Dispatch>('/api/tool-call', {method:'POST',headers:capability?{'X-Upload-Capability':capability}:{},body:json(call)}),
+  receipts: (pin: string, taskId?: string) => request<Receipt[]>(`/api/receipts${taskId?`?taskId=${encodeURIComponent(taskId)}`:''}`, {headers:{'X-Operator-Pin':pin}}),
   verifyClaim: (pin: string, claim: {claimId:string;taskId:string;callId:string;kind:'email_sent';recipient:string;subjectDigest:string;bodyDigest:string}) => request<ClaimResult>('/api/claims/verify', {method:'POST',headers:{'X-Operator-Pin':pin},body:json(claim)})
   ,createUploadSession:()=>request<UploadSession>('/api/uploads/sessions',{method:'POST',body:json({})}),
   uploadDocument:(session:UploadSession,file:File)=>request<UploadedDocument>(`/api/uploads/sessions/${encodeURIComponent(session.sessionId)}/documents`,{method:'POST',headers:{'X-Upload-Capability':session.capability,'X-Upload-Filename':file.name,'Content-Type':file.type||'application/octet-stream'},body:file}),

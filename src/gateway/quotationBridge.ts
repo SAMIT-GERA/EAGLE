@@ -39,13 +39,14 @@ export class TrustedQuotationBridgeError extends Error {
 function sourceId(fileId: 'quote-A' | 'quote-B'): string {
   return `procurement-v1:${fileId}`;
 }
+export type TrustedUploadedQuoteSource = Readonly<{taskId:string;fileId:'quote-A'|'quote-B';documentId:string;sha256:string}>;
 
 /**
  * Build a structured quotation only from an already successful gateway read.
  * The source ID is derived from the server-owned profile and frozen public ID;
  * it is not supplied by the caller, the fixture text, or a model.
  */
-export function bridgeTrustedReadQuote(input: unknown) {
+export function bridgeTrustedReadQuote(input: unknown, uploadedSource?: TrustedUploadedQuoteSource) {
   const parsed = trustedReadQuoteBridgeInputSchema.safeParse(input);
   if (!parsed.success) {
     throw new TrustedQuotationBridgeError('Gateway response is not a successful trusted quote read.');
@@ -64,13 +65,18 @@ export function bridgeTrustedReadQuote(input: unknown) {
       throw new TrustedQuotationBridgeError('Gateway quote identifier does not match the requested file.');
     }
 
+    const canonicalDigest = hashQuotationSource(quote);
+    if (uploadedSource && (uploadedSource.taskId !== request.taskId || uploadedSource.fileId !== request.args.fileId ||
+      !/^doc-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uploadedSource.documentId) || uploadedSource.sha256 !== canonicalDigest)) {
+      throw new TrustedQuotationBridgeError('Uploaded quote source does not match the trusted binding and gateway result.');
+    }
     const quotation = quotationPayloadSchema.parse({
       format: 'procurement-v1',
       data: response.data,
       source: {
         basis: 'canonical_quote_v1',
-        sourceId: sourceId(quote.fileId),
-        sha256: hashQuotationSource(quote)
+        sourceId: uploadedSource ? `upload-v1:${uploadedSource.documentId}` : sourceId(quote.fileId),
+        sha256: canonicalDigest
       }
     });
     return gatewayObservationSchema.parse({
